@@ -10,7 +10,6 @@ import java.awt.geom.Ellipse2D;
 import java.awt.geom.RoundRectangle2D;
 import java.io.IOException;
 
-/** Экран создания игры: имя, цвет, порт, поле, скорость, тикрейт. */
 public final class HostScreen extends Screen {
 
     private final InputField nameField;
@@ -36,7 +35,7 @@ public final class HostScreen extends Screen {
         super(app);
         color = app.myColor();
 
-        nameField = new InputField("Как тебя зовут?");
+        nameField = new InputField("What is your name?");
         nameField.setText(app.prefs().get("name", app.myName()));
         addField(nameField, 100, 258, 340, 54, 19);
 
@@ -62,7 +61,7 @@ public final class HostScreen extends Screen {
                 syncChips();
             }));
         }
-        bWalls = add(new NeonButton("Смерть о стену", NeonButton.Style.CHIP, 660, 486, 260, 44, () -> {
+        bWalls = add(new NeonButton("Wall death", NeonButton.Style.CHIP, 660, 486, 260, 44, () -> {
             walls = !walls;
             syncChips();
         }));
@@ -70,12 +69,12 @@ public final class HostScreen extends Screen {
             subtick = !subtick;
             syncChips();
         }));
-        bTcp = add(new NeonButton("Транспорт: UDP", NeonButton.Style.CHIP, 100, 540, 340, 44, () -> {
+        bTcp = add(new NeonButton("Transport: UDP", NeonButton.Style.CHIP, 100, 540, 340, 44, () -> {
             udp = !udp;
             syncChips();
         }));
-        add(new NeonButton("Назад", NeonButton.Style.SECONDARY, 56, 44, 100, 42, () -> win.show(app.homeScreen())));
-        bStart = add(new NeonButton("ЗАПУСТИТЬ СЕРВЕР", NeonButton.Style.PRIMARY, 56, 676, 360, 64, this::startServer));
+        add(new NeonButton("Back", NeonButton.Style.SECONDARY, 56, 44, 100, 42, () -> win.show(app.homeScreen())));
+        bStart = add(new NeonButton("START SERVER", NeonButton.Style.PRIMARY, 56, 676, 360, 64, this::startServer));
 
         for (int i = 0; i < 10; i++) {
             final int idx = i;
@@ -91,26 +90,26 @@ public final class HostScreen extends Screen {
             tickChips[i].selected = i == tickIndex;
         }
         bWalls.selected = walls;
-        bWalls.label = walls ? "Смерть о стену" : "Сквозь стены";
+        bWalls.label = walls ? "Wall death" : "Pass through walls";
         bSubtick.selected = subtick;
         bTcp.selected = udp;
-        bTcp.label = udp ? "Транспорт: UDP" : "Транспорт: TCP";
+        bTcp.label = udp ? "Transport: UDP" : "Transport: TCP";
     }
 
     private void startServer() {
         String name = GameConfig.sanitizeName(nameField.getText());
-        if (name.isEmpty()) name = "Хост";
+        if (name.isEmpty()) name = "Host";
         int port;
         String raw = portField.getText().trim();
         if (raw.isEmpty()) raw = "0";
         try {
             port = Integer.parseInt(raw);
         } catch (NumberFormatException e) {
-            app.toastError("Порт — это число, например 45800");
+            app.toastError("Port must be a number, for example 45800");
             return;
         }
         if (port < 0 || port > 65535) {
-            app.toastError("Порт должен быть от 0 до 65535");
+            app.toastError("Port must be between 0 and 65535");
             return;
         }
         GameConfig cfg = new GameConfig();
@@ -125,28 +124,27 @@ public final class HostScreen extends Screen {
         try {
             app.hostGame(port, cfg, name, color);
         } catch (IOException e) {
-            String msg = e.getMessage() == null ? "неизвестная ошибка" : e.getMessage();
+            String msg = e.getMessage() == null ? "unknown error" : e.getMessage();
             if (msg.toLowerCase().contains("address already in use")) {
-                app.toastError("Порт " + port + " занят — попробуй другой");
+                app.toastError("Port " + port + " is busy — try another one");
             } else {
-                app.toastError("Не удалось открыть сервер: " + msg);
+                app.toastError("Could not start the server: " + msg);
             }
         }
     }
 
     @Override
     protected void paintScreen(Graphics2D g) {
-        Brush.text(g, "Создать игру", 56, 136, Theme.display(42), Theme.TEXT);
-        Brush.text(g, "Ты будешь хостом: остальным нужен только твой адрес", 58, 166, Theme.font(15), Theme.MUTED);
+        Brush.text(g, "Create game", 56, 136, Theme.display(42), Theme.TEXT);
+        Brush.text(g, "You are the host: everyone else only needs your address", 58, 166, Theme.font(15), Theme.MUTED);
 
         Brush.panel(g, 56, 196, 1168, 440, 26);
 
-        // левая колонка
-        Brush.text(g, "ИМЯ ИГРОКА", 100, 244, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "ЦВЕТ", 100, 348, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "ПОРТ", 100, 436, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "0 — любой свободный", 264, 483, Theme.font(13), Theme.MUTED);
-        Brush.text(g, "СЕТЬ", 100, 526, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "PLAYER NAME", 100, 244, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "COLOR", 100, 348, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "PORT", 100, 436, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "0 — any free port", 264, 483, Theme.font(13), Theme.MUTED);
+        Brush.text(g, "NETWORK", 100, 526, Theme.semibold(11), Theme.MUTED);
 
         for (int i = 0; i < 10; i++) {
             double cx = 116 + i * 38;
@@ -165,29 +163,27 @@ public final class HostScreen extends Screen {
 
         Brush.divider(g, 620, 226, 620, 606, new Color(0x2E, 0x38, 0x46, 190));
 
-        // правая колонка
-        Brush.text(g, "РАЗМЕР ПОЛЯ", 660, 244, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "СКОРОСТЬ", 660, 320, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "ТИКРЕЙТ", 660, 396, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "СТЕНЫ", 660, 472, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "BOARD SIZE", 660, 244, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "SPEED", 660, 320, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "TICK RATE", 660, 396, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "WALLS", 660, 472, Theme.semibold(11), Theme.MUTED);
 
         int[] size = GameConfig.SIZE[sizeIndex];
-        Brush.text(g, "Поле " + size[0] + "×" + size[1] + " · " + GameConfig.SPEED_CELLS[speedIndex] + " кл/с · "
-                        + GameConfig.TICK_RATES[tickIndex] + " тик/с",
+        Brush.text(g, "Board " + size[0] + "×" + size[1] + " · " + GameConfig.SPEED_CELLS[speedIndex] + " cells/s · "
+                        + GameConfig.TICK_RATES[tickIndex] + " ticks/s",
                 1000, 244, Theme.font(13), Theme.MUTED);
 
-        // карточка адреса
         g.setColor(new Color(0x1B, 0x22, 0x2C, 235));
         g.fill(new RoundRectangle2D.Double(660, 548, 470, 74, 16, 16));
         g.setColor(new Color(0x3A, 0x44, 0x52));
         g.setStroke(new BasicStroke(1f));
         g.draw(new RoundRectangle2D.Double(660, 548, 470, 74, 16, 16));
-        Brush.text(g, "ДРУЗЬЯМ НУЖНО ВВЕСТИ", 682, 574, Theme.semibold(10), Theme.MUTED);
+        Brush.text(g, "FRIENDS NEED TO ENTER", 682, 574, Theme.semibold(10), Theme.MUTED);
         String portText = portField.getText().trim();
         String addr = NetInfo.primaryIp() + ":" + (portText.isEmpty() ? "45800" : portText);
         Brush.text(g, addr, 682, 606, Theme.mono(22), Theme.ACCENT);
 
-        Brush.text(g, "Порт откроется на этом компьютере. Windows может спросить про брандмауэр — разреши доступ.",
+        Brush.text(g, "The port opens on this computer. Windows may ask about the firewall — allow access.",
                 444, 714, Theme.font(13), Theme.MUTED);
     }
 }

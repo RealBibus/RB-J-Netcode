@@ -17,10 +17,10 @@ import java.awt.event.MouseMotionListener;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Базовый экран. Всё рисуется в виртуальной системе координат 1280×800
- * и масштабируется под окно; поля ввода — настоящие компоненты поверх.
- */
+
+
+
+
 public abstract class Screen extends JPanel implements MouseListener, MouseMotionListener {
 
     public static final int VW = 1280;
@@ -40,7 +40,7 @@ public abstract class Screen extends JPanel implements MouseListener, MouseMotio
     private final List<FieldSlot> fields = new ArrayList<>();
     private double lastScale = -1;
 
-    /** Кликабельная область без кнопки: строки списка, кружки цвета. */
+    
     private static final class Hotspot {
         final double x;
         final double y;
@@ -207,6 +207,7 @@ public abstract class Screen extends JPanel implements MouseListener, MouseMotio
         v.dispose();
 
         drawToast(g);
+        drawConnectionOverlay(g);
     }
 
     private void drawToast(Graphics g0) {
@@ -234,9 +235,87 @@ public abstract class Screen extends JPanel implements MouseListener, MouseMotio
         g.dispose();
     }
 
-    // ------------------------------------------------------------------
-    // мышь
-    // ------------------------------------------------------------------
+    private void drawConnectionOverlay(Graphics g0) {
+        float dim = app.connectionDim();
+        float restored = app.connectionRestoredAlpha();
+        if (dim <= 0.001f && restored <= 0.001f) return;
+
+        Graphics2D g = (Graphics2D) g0.create();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        int w = getWidth();
+        int h = getHeight();
+        double cx = w / 2.0;
+        double cy = h / 2.0;
+        double s = Math.max(0.55, scale);
+
+        if (dim > 0.001f) {
+            g.setColor(new Color(0, 0, 0, Math.round(dim * 255)));
+            g.fillRect(0, 0, w, h);
+
+            float pulse = 0.55f + 0.45f * (float) (0.5 + 0.5 * Math.sin(time * 3.4));
+            float alpha = Math.min(1f, dim / 0.72f) * pulse;
+            g.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, alpha));
+
+            java.awt.geom.Path2D.Double triangle = new java.awt.geom.Path2D.Double();
+            triangle.moveTo(cx, cy - 156 * s);
+            triangle.lineTo(cx + 74 * s, cy - 22 * s);
+            triangle.lineTo(cx - 74 * s, cy - 22 * s);
+            triangle.closePath();
+            g.setColor(new Color(0xFF, 0xAE, 0x2E));
+            g.fill(triangle);
+            g.setColor(new Color(0x2A, 0x16, 0x00));
+            g.fill(new java.awt.geom.RoundRectangle2D.Double(cx - 6 * s, cy - 114 * s, 12 * s, 54 * s, 8 * s, 8 * s));
+            g.fill(new java.awt.geom.Ellipse2D.Double(cx - 6 * s, cy - 50 * s, 12 * s, 12 * s));
+
+            g.setFont(Theme.bold((float) Math.max(18, 28 * s)));
+            FontMetrics fm = g.getFontMetrics();
+            String title = "CONNECTION LOST";
+            g.setColor(new Color(0xF4, 0xF7, 0xFF));
+            g.drawString(title, (float) (cx - fm.stringWidth(title) / 2.0), (float) (cy + 40 * s));
+
+            long left = app.connectionMillisLeft();
+            long seconds = (left + 999) / 1000;
+            g.setFont(Theme.font((float) Math.max(12, 15 * s)));
+            fm = g.getFontMetrics();
+            String sub = "Reconnecting… " + seconds + "s left";
+            g.setColor(new Color(0xC7, 0xD2, 0xE4));
+            g.drawString(sub, (float) (cx - fm.stringWidth(sub) / 2.0), (float) (cy + 72 * s));
+            String hint = "Your session is kept for 30 seconds";
+            g.setColor(new Color(0x8E, 0x9C, 0xB2));
+            g.drawString(hint, (float) (cx - fm.stringWidth(hint) / 2.0), (float) (cy + 94 * s));
+        }
+
+        if (restored > 0.001f) {
+            g.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, restored));
+            g.setColor(new Color(0x0A, 0x1A, 0x14, 210));
+            double rw = 360 * s;
+            double rh = 118 * s;
+            g.fill(new java.awt.geom.RoundRectangle2D.Double(cx - rw / 2, cy - rh / 2, rw, rh, 22 * s, 22 * s));
+            g.setColor(new Color(0x2E, 0xE0, 0x92));
+            g.setStroke(new BasicStroke((float) Math.max(1.5, 2 * s)));
+            g.draw(new java.awt.geom.RoundRectangle2D.Double(cx - rw / 2, cy - rh / 2, rw, rh, 22 * s, 22 * s));
+
+            g.setColor(new Color(0x2E, 0xE0, 0x92));
+            g.fill(new java.awt.geom.Ellipse2D.Double(cx - 40 * s, cy - 44 * s, 26 * s, 26 * s));
+            g.setColor(new Color(0x0A, 0x1A, 0x14));
+            g.setStroke(new BasicStroke((float) Math.max(2, 3 * s), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.draw(new java.awt.geom.Line2D.Double(cx - 34 * s, cy - 31 * s, cx - 29 * s, cy - 25 * s));
+            g.draw(new java.awt.geom.Line2D.Double(cx - 29 * s, cy - 25 * s, cx - 19 * s, cy - 38 * s));
+
+            g.setFont(Theme.bold((float) Math.max(15, 20 * s)));
+            g.setColor(new Color(0xE8, 0xFF, 0xF4));
+            g.drawString("RECONNECTED", (float) (cx - 6 * s), (float) (cy - 22 * s));
+            g.setFont(Theme.font((float) Math.max(11, 13 * s)));
+            g.setColor(new Color(0x9E, 0xC8, 0xB4));
+            g.drawString("Session restored", (float) (cx - 6 * s), (float) (cy + 4 * s));
+        }
+        g.dispose();
+    }
+
+    
+    
+    
 
     private double vx(MouseEvent e) {
         return (e.getX() - ox) / Math.max(0.001, scale);

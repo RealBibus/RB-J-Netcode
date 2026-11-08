@@ -1,14 +1,14 @@
 package netcore.predict;
 
-/** Одно нажатие игрока, привязанное к тику и доле тика. */
+
 public final class InputCommand {
 
     public final int seq;
-    /** Тик, в котором ввод должен быть применён. Сервер может прислать точный — тогда правим. */
+    
     public int tick;
-    /** Доля тика 0..1 — используется в режиме {@code SUBTICK}. */
+    
     public final float sub;
-    /** Код действия; движку всё равно, игра его трактует. */
+    
     public final int action;
 
     public InputCommand(int seq, int tick, float sub, int action) {

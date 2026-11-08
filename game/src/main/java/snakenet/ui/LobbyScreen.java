@@ -15,7 +15,6 @@ import java.awt.geom.RoundRectangle2D;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Лобби: состав игроков, чат, настройки и старт партии. */
 public final class LobbyScreen extends Screen {
 
     private static final class Roster {
@@ -54,22 +53,22 @@ public final class LobbyScreen extends Screen {
     public LobbyScreen(App app) {
         super(app);
 
-        chatField = new InputField("Сообщение…");
+        chatField = new InputField("Message…");
         addField(chatField, 858, 596, 300, 40, 15);
         chatField.addActionListener(e -> sendChat());
 
-        bField = add(new NeonButton("Поле", NeonButton.Style.CHIP, 56, 664, 200, 40, this::cycleField));
-        bSpeed = add(new NeonButton("Скорость", NeonButton.Style.CHIP, 264, 664, 180, 40, this::cycleSpeed));
-        bTick = add(new NeonButton("Тик", NeonButton.Style.CHIP, 452, 664, 130, 40, this::cycleTick));
+        bField = add(new NeonButton("Field", NeonButton.Style.CHIP, 56, 664, 200, 40, this::cycleField));
+        bSpeed = add(new NeonButton("Speed", NeonButton.Style.CHIP, 264, 664, 180, 40, this::cycleSpeed));
+        bTick = add(new NeonButton("Tick", NeonButton.Style.CHIP, 452, 664, 130, 40, this::cycleTick));
         bSub = add(new NeonButton("SUB", NeonButton.Style.CHIP, 590, 664, 110, 40, this::toggleSubtick));
-        bWalls = add(new NeonButton("Стены", NeonButton.Style.CHIP, 708, 664, 150, 40, this::toggleWalls));
-        bBotAdd = add(new NeonButton("+ Бот", NeonButton.Style.CHIP, 866, 664, 80, 40, () -> app.send(Msg.of(Protocol.BOT).put("op", "add"))));
-        bBotDel = add(new NeonButton("− Бот", NeonButton.Style.CHIP, 954, 664, 80, 40, () -> app.send(Msg.of(Protocol.BOT).put("op", "del"))));
+        bWalls = add(new NeonButton("Walls", NeonButton.Style.CHIP, 708, 664, 150, 40, this::toggleWalls));
+        bBotAdd = add(new NeonButton("+ Bot", NeonButton.Style.CHIP, 866, 664, 80, 40, () -> app.send(Msg.of(Protocol.BOT).put("op", "add"))));
+        bBotDel = add(new NeonButton("− Bot", NeonButton.Style.CHIP, 954, 664, 80, 40, () -> app.send(Msg.of(Protocol.BOT).put("op", "del"))));
 
-        bReady = add(new NeonButton("Готов", NeonButton.Style.PRIMARY, 960, 720, 156, 52, this::toggleReady));
-        bStart = add(new NeonButton("НАЧАТЬ ИГРУ", NeonButton.Style.PRIMARY, 900, 720, 216, 52, () -> app.send(Msg.of(Protocol.START))));
+        bReady = add(new NeonButton("Ready", NeonButton.Style.PRIMARY, 960, 720, 156, 52, this::toggleReady));
+        bStart = add(new NeonButton("START GAME", NeonButton.Style.PRIMARY, 900, 720, 216, 52, () -> app.send(Msg.of(Protocol.START))));
         add(new NeonButton("→", NeonButton.Style.SECONDARY, 1166, 596, 46, 40, this::sendChat));
-        add(new NeonButton("Выйти", NeonButton.Style.DANGER, 1128, 720, 96, 52, () -> app.leaveToHome()));
+        add(new NeonButton("Exit", NeonButton.Style.DANGER, 1128, 720, 96, 52, () -> app.leaveToHome()));
 
         addHotspot(900, 92, 324, 46, this::copyAddress);
 
@@ -96,7 +95,7 @@ public final class LobbyScreen extends Screen {
         String addr = app.gameAddress();
         if (addr == null || addr.isBlank()) return;
         Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(addr), null);
-        app.toast("Адрес скопирован: " + addr);
+        app.toast("Address copied: " + addr);
     }
 
     private void toggleReady() {
@@ -204,7 +203,7 @@ public final class LobbyScreen extends Screen {
         } else {
             pendingKick = id;
             pendingKickAt = now;
-            app.toast("Ещё раз по игроку — выкинуть");
+            app.toast("Click the player again to kick");
         }
     }
 
@@ -221,16 +220,16 @@ public final class LobbyScreen extends Screen {
         bStart.visible = host;
         bReady.visible = !host;
 
-        bField.label = "Поле · " + cfg.sizeLabel();
-        bSpeed.label = cfg.cellsPerSec + " кл/с";
-        bTick.label = cfg.tickRate + " тик";
-        bSub.label = cfg.subtick ? "SUB ×" + cfg.subSteps : "SUB выкл";
+        bField.label = "Field · " + cfg.sizeLabel();
+        bSpeed.label = cfg.cellsPerSec + " cells/s";
+        bTick.label = cfg.tickRate + " Hz";
+        bSub.label = cfg.subtick ? "SUB ×" + cfg.subSteps : "SUB off";
         bSub.selected = cfg.subtick;
-        bWalls.label = cfg.walls ? "Стены · вкл" : "Стены · сквозь";
+        bWalls.label = cfg.walls ? "Walls · solid" : "Walls · wrap";
         bWalls.selected = cfg.walls;
 
         bReady.selected = me != null && me.ready;
-        bReady.label = me != null && me.ready ? "Не готов" : "Готов";
+        bReady.label = me != null && me.ready ? "Not ready" : "Ready";
         bStart.enabled = !players.isEmpty();
 
         clearHotspots();
@@ -252,16 +251,16 @@ public final class LobbyScreen extends Screen {
 
     @Override
     protected void paintScreen(Graphics2D g) {
-        Brush.text(g, "Лобби", 56, 132, Theme.display(40), Theme.TEXT);
-        Brush.text(g, "Пригласи друзей по адресу — или добавь ботов и играй один", 58, 160, Theme.font(15), Theme.MUTED);
+        Brush.text(g, "Lobby", 56, 132, Theme.display(40), Theme.TEXT);
+        Brush.text(g, "Invite friends with the address — or add bots and play solo", 58, 160, Theme.font(15), Theme.MUTED);
 
         paintAddress(g);
 
         Brush.panel(g, 56, 186, 760, 464, 26);
         Brush.panel(g, 840, 186, 384, 464, 26);
 
-        Brush.text(g, "ИГРОКИ · " + players.size() + " / " + Math.max(2, cfg.maxPlayers), 86, 222, Theme.semibold(11), Theme.MUTED);
-        Brush.right(g, "СТАТУС", 786, 222, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "PLAYERS · " + players.size() + " / " + Math.max(2, cfg.maxPlayers), 86, 222, Theme.semibold(11), Theme.MUTED);
+        Brush.right(g, "STATUS", 786, 222, Theme.semibold(11), Theme.MUTED);
 
         int slots = 8;
         for (int i = 0; i < slots; i++) {
@@ -274,7 +273,7 @@ public final class LobbyScreen extends Screen {
                 g.setColor(new Color(0x2E, 0x38, 0x46, 150));
                 g.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 1f, new float[]{5, 6}, 0));
                 g.draw(new RoundRectangle2D.Double(76.5, y + 0.5, 719, 43, 14, 14));
-                Brush.text(g, "Свободное место", 100, y + 27, Theme.font(14), new Color(0x5C, 0x66, 0x72));
+                Brush.text(g, "Free slot", 100, y + 27, Theme.font(14), new Color(0x5C, 0x66, 0x72));
             }
         }
 
@@ -289,9 +288,9 @@ public final class LobbyScreen extends Screen {
         g.setColor(new Color(0x3A, 0x44, 0x52));
         g.setStroke(new BasicStroke(1.1f));
         g.draw(new RoundRectangle2D.Double(900, 92, 324, 46, 23, 23));
-        Brush.text(g, "АДРЕС ДЛЯ ДРУЗЕЙ", 918, 112, Theme.semibold(9), Theme.MUTED);
+        Brush.text(g, "ADDRESS FOR FRIENDS", 918, 112, Theme.semibold(9), Theme.MUTED);
         Brush.text(g, addr, 918, 130, Theme.mono(16), Theme.ACCENT);
-        Brush.text(g, "копировать", 1120, 121, Theme.font(11), Theme.MUTED);
+        Brush.text(g, "copy", 1120, 121, Theme.font(11), Theme.MUTED);
     }
 
     private void paintRosterRow(Graphics2D g, Roster r, double y) {
@@ -309,24 +308,24 @@ public final class LobbyScreen extends Screen {
         g.fill(new Ellipse2D.Double(99, y + 17, 12, 12));
 
         g.setFont(Theme.semibold(16));
-        String name = Brush.ellipsize(g, r.name + (self ? " (ты)" : ""), 320);
+        String name = Brush.ellipsize(g, r.name + (self ? " (you)" : ""), 320);
         Brush.text(g, name, 130, y + 28, Theme.semibold(16), Theme.TEXT);
 
         double badgeX = 130 + g.getFontMetrics().stringWidth(name) + 14;
         if (r.bot) {
-            badge(g, badgeX, y + 12, "БОТ", Theme.ACCENT2);
+            badge(g, badgeX, y + 12, "BOT", Theme.ACCENT2);
         }
 
         String status;
         Color statusColor;
         if (r.host) {
-            status = "хост";
+            status = "host";
             statusColor = Theme.GOLD;
         } else if (r.ready) {
-            status = "готов";
+            status = "ready";
             statusColor = Theme.ACCENT;
         } else {
-            status = "ждёт";
+            status = "waiting";
             statusColor = Theme.MUTED;
         }
         Brush.right(g, status, 786, y + 28, Theme.semibold(13), statusColor);
@@ -347,7 +346,7 @@ public final class LobbyScreen extends Screen {
     }
 
     private void paintChat(Graphics2D g) {
-        Brush.text(g, "ЧАТ", 866, 222, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "CHAT", 866, 222, Theme.semibold(11), Theme.MUTED);
 
         double bottom = 586;
         double top = 240;
@@ -376,8 +375,8 @@ public final class LobbyScreen extends Screen {
             shown++;
         }
         if (chat.isEmpty()) {
-            Brush.text(g, "Тут пока тихо.", 866, 300, Theme.font(14), Theme.MUTED);
-            Brush.text(g, "Напиши первым — друзья увидят.", 866, 322, Theme.font(13), Theme.MUTED);
+            Brush.text(g, "It's quiet here.", 866, 300, Theme.font(14), Theme.MUTED);
+            Brush.text(g, "Say hi first — your friends will see it.", 866, 322, Theme.font(13), Theme.MUTED);
         }
     }
 

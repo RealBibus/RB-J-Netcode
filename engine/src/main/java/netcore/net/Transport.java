@@ -1,6 +1,6 @@
 package netcore.net;
 
-/** Транспорт: TCP или UDP с надёжностью. */
+
 public interface Transport extends AutoCloseable {
 
     interface Listener {
@@ -10,6 +10,9 @@ public interface Transport extends AutoCloseable {
     }
 
     void send(Packet packet);
+
+    default void start() {
+    }
 
     boolean isOpen();
 

@@ -1,18 +1,18 @@
 @echo off
 chcp 65001 >nul
-title Snake NET - брандмауэр
+title Snake NET - firewall
 
 net session >nul 2>&1
 if errorlevel 1 (
   echo.
-  echo   Нужны права администратора.
-  echo   Нажми на файл правой кнопкой -^> "Запуск от имени администратора".
+  echo   Administrator rights are required.
+  echo   Right-click the file and choose "Run as administrator".
   echo.
   pause
   exit /b 1
 )
 
-echo   Открываю порты для Snake NET...
+echo   Opening ports for Snake NET...
 netsh advfirewall firewall delete rule name="Snake NET TCP" >nul 2>&1
 netsh advfirewall firewall delete rule name="Snake NET UDP" >nul 2>&1
 netsh advfirewall firewall add rule name="Snake NET TCP" dir=in action=allow protocol=TCP localport=45800 >nul
@@ -20,8 +20,8 @@ netsh advfirewall firewall add rule name="Snake NET UDP" dir=in action=allow pro
 netsh advfirewall firewall add rule name="Snake NET UDP out" dir=out action=allow protocol=UDP localport=45777 >nul
 
 echo.
-echo   Готово: 45800/TCP и 45777/UDP открыты для входящих.
-echo   Если в настройках игры выбран другой порт, открой его так же
-echo   или просто нажми "Разрешить" в окне брандмауэра Windows.
+echo   Done: 45800/TCP and 45777/UDP are open for incoming traffic.
+echo   If the game uses another port, open it the same way,
+echo   or simply press "Allow" in the Windows firewall dialog.
 echo.
 pause

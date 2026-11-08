@@ -6,16 +6,16 @@ cd /d "%~dp0"
 
 if not exist "SnakeNET.jar" (
   echo.
-  echo   SnakeNET.jar не найден.
-  echo   Сначала запусти build.bat - он соберёт движок и игру.
+  echo   SnakeNET.jar not found.
+  echo   Run build.bat first - it builds the engine and the game.
   echo.
   pause
   exit /b 1
 )
 if not exist "NetCore.jar" (
   echo.
-  echo   NetCore.jar не найден - это сетевой движок, без него игра не запустится.
-  echo   Запусти build.bat.
+  echo   NetCore.jar not found - this is the network engine, the game cannot start without it.
+  echo   Run build.bat.
   echo.
   pause
   exit /b 1
@@ -44,17 +44,17 @@ if not defined JAVA call :deep "%USERPROFILE%\.vscode\extensions"
 
 if not defined JAVA (
   echo.
-  echo   Java 17 или новее не найдена.
+  echo   Java 25 or newer was not found.
   echo.
-  echo   Скачай и поставь бесплатную Java 17+ отсюда:
-  echo     https://adoptium.net/temurin/releases/?version=17
-  echo   после установки запусти run.bat снова.
+  echo   Download and install free Java 25+ from:
+  echo     https://adoptium.net/temurin/releases/?version=25
+  echo   then run run.bat again.
   echo.
   pause
   exit /b 1
 )
 
-echo   Запускаю на Java !JAVA_VER! ...
+echo   Starting on Java !JAVA_VER! ...
 set "JAVAW=%JAVA:java.exe=javaw.exe%"
 if exist "%JAVAW%" (
   start "" "%JAVAW%" -cp "SnakeNET.jar;NetCore.jar" snakenet.Main %*
@@ -81,7 +81,7 @@ if not defined MAJOR exit /b 0
 set "JAVA_VER=!MAJOR!"
 for /f "tokens=1 delims=." %%a in ("!MAJOR!") do set "MAJOR=%%a"
 if "!MAJOR!"=="1" exit /b 0
-if !MAJOR! LSS 17 exit /b 0
+if !MAJOR! LSS 25 exit /b 0
 set "JAVA=%~1"
 exit /b 0
 

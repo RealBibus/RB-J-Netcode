@@ -10,7 +10,7 @@ import java.awt.Dimension;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 
-/** Главное окно: держит текущий экран и общий такт анимации. */
+
 public final class MainWindow extends JFrame {
 
     private final App app;
@@ -23,7 +23,7 @@ public final class MainWindow extends JFrame {
     private int fps = 60;
 
     public MainWindow(App app) {
-        super("SNAKE NET — сетевая змейка");
+        super("SNAKE NET — networked snake");
         this.app = app;
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         setMinimumSize(new Dimension(960, 640));

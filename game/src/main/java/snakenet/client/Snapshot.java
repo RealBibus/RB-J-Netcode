@@ -6,7 +6,7 @@ import snakenet.net.Protocol;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Снимок игрового поля, каким его увидел клиент. */
+
 public final class Snapshot {
 
     public static final class FoodView {
@@ -21,10 +21,12 @@ public final class Snapshot {
         public int dir;
         public int color;
         public boolean alive;
-        /** Номер последнего обработанного сервером ввода этого игрока. */
+        
         public int ackSeq;
-        /** Накопитель движения в долях клетки. */
+        
         public int acc;
+        
+        public int ping = -1;
         public int[] xs = new int[0];
         public int[] ys = new int[0];
 
@@ -90,6 +92,7 @@ public final class Snapshot {
                     s.alive = m.num("a", 0) == 1;
                     s.ackSeq = m.num("ls", 0);
                     s.acc = m.num("ac", 0);
+                    s.ping = m.num("pg", -1);
                     String g = m.raw("g");
                     if (!g.isEmpty()) {
                         String[] parts = g.split(",");

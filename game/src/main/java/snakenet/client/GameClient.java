@@ -10,16 +10,20 @@ import javax.swing.SwingUtilities;
 import java.io.IOException;
 import java.util.List;
 
-/** Клиент змейки: обёртка над {@link NetClient} движка. */
 public final class GameClient implements NetClient.Listener {
 
     public interface Listener {
         void onFrame(List<Msg> frame);
 
-        /** Пришёл голосовой кадр: 16 кГц, моно, 16 бит. */
         void onVoice(int playerId, short[] pcm);
 
         void onClosed(String reason);
+
+        default void onLinkLost(String reason, long retryForMs) {
+        }
+
+        default void onLinkRestored() {
+        }
     }
 
     private final Listener listener;
@@ -40,7 +44,6 @@ public final class GameClient implements NetClient.Listener {
         return client;
     }
 
-    /** "UDP" или "TCP" — чем реально подключились. */
     public String protocol() {
         return net == null ? "?" : net.protocol();
     }
@@ -67,7 +70,6 @@ public final class GameClient implements NetClient.Listener {
         }
     }
 
-    /** Голосовой кадр, без подтверждений. */
     public void sendVoice(byte[] frame) {
         if (net != null && net.isOpen()) net.sendUnreliable(frame);
     }
@@ -75,6 +77,16 @@ public final class GameClient implements NetClient.Listener {
     @Override
     public void onClosed(String reason) {
         SwingUtilities.invokeLater(() -> listener.onClosed(reason));
+    }
+
+    @Override
+    public void onLinkLost(String reason, long retryForMs) {
+        SwingUtilities.invokeLater(() -> listener.onLinkLost(reason, retryForMs));
+    }
+
+    @Override
+    public void onLinkRestored() {
+        SwingUtilities.invokeLater(listener::onLinkRestored);
     }
 
     public void send(Msg message) {
@@ -85,13 +97,36 @@ public final class GameClient implements NetClient.Listener {
         return net == null ? null : net.clock();
     }
 
+    public netcore.net.NetStats stats() {
+        return net == null ? null : net.stats();
+    }
+
     public int rttMs() {
         ClockSync c = clock();
         return c == null ? -1 : c.rttMs();
     }
 
+    public int jitterMs() {
+        ClockSync c = clock();
+        return c == null ? -1 : c.jitterMs();
+    }
+
+    public int lossPercent() {
+        ClockSync c = clock();
+        return c == null ? 0 : c.lossPercent();
+    }
+
+    public int quality() {
+        ClockSync c = clock();
+        return c == null ? 0 : c.quality();
+    }
+
     public boolean isOpen() {
         return net != null && net.isOpen();
+    }
+
+    public boolean isReconnecting() {
+        return net != null && net.isReconnecting();
     }
 
     public void close() {

@@ -1,6 +1,6 @@
 package netcore.predict;
 
-/** Пороги предсказания. */
+
 public final class PredictionConfig {
 
     public static final PredictionConfig DEFAULT = new PredictionConfig(1.5, 48);
@@ -17,7 +17,7 @@ public final class PredictionConfig {
         return new PredictionConfig(snapThreshold, 48);
     }
 
-    /** Ошибка больше порога — не сглаживаем, а телепортируем к серверу. */
+    
     public double snapThreshold() {
         return snapThreshold;
     }

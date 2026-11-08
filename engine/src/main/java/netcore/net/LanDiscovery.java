@@ -17,10 +17,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.IntSupplier;
 
-/**
- * Автообнаружение игр в локальной сети: хост раз в секунду кричит UDP-бродкастом,
- * клиент слушает и показывает список. Никаких внешних серверов.
- */
+
+
+
+
 public final class LanDiscovery {
 
     public static final int PORT = 45777;
@@ -52,7 +52,7 @@ public final class LanDiscovery {
         }
     }
 
-    /** Хостовая часть: рассылает приглашение. */
+    
     public static final class Beacon {
         private final String name;
         private final int port;
@@ -107,7 +107,7 @@ public final class LanDiscovery {
         }
     }
 
-    /** Клиентская часть: слушает приглашения и отдаёт список. */
+    
     public static final class Scanner {
         private final Consumer<List<Found>> listener;
         private final Map<String, Found> found = new ConcurrentHashMap<>();
@@ -119,7 +119,7 @@ public final class LanDiscovery {
             this.listener = listener;
         }
 
-        /** @return удалось ли занять порт и начать слушать */
+        
         public boolean start() {
             try {
                 socket = new DatagramSocket(null);
@@ -127,7 +127,7 @@ public final class LanDiscovery {
                 socket.bind(new InetSocketAddress(PORT));
                 socket.setSoTimeout(600);
             } catch (IOException e) {
-                return false; // нет прав или порт занят — покажем ручной ввод
+                return false; 
             }
             running = true;
             thread = new Thread(this::loop, "snake-scan");
@@ -154,7 +154,7 @@ public final class LanDiscovery {
                         found.put(host + ":" + port, new Found(name, host, port, players, max, System.currentTimeMillis()));
                     }
                 } catch (java.net.SocketTimeoutException ignored) {
-                    // нормально: просто чистим устаревшие
+                    
                 } catch (Exception e) {
                     if (!running) break;
                 }
@@ -183,7 +183,7 @@ public final class LanDiscovery {
     static List<InetAddress> broadcastAddresses() {
         List<InetAddress> out = new ArrayList<>();
         try {
-            // loopback: чтобы две копии игры на одном компьютере тоже видели друг друга
+            
             out.add(InetAddress.getByName("127.0.0.1"));
             out.add(InetAddress.getByName("255.255.255.255"));
             for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {

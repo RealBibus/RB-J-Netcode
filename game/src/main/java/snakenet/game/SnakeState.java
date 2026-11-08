@@ -3,7 +3,7 @@ package snakenet.game;
 import java.util.ArrayDeque;
 import java.util.Deque;
 
-/** Состояние одной змейки на сервере. */
+
 public final class SnakeState {
 
     public static final int UP = 0;
@@ -13,9 +13,9 @@ public final class SnakeState {
 
     public static final int[] DX = {0, 1, 0, -1};
     public static final int[] DY = {-1, 0, 1, 0};
-    public static final String[] DIR_NAMES = {"вверх", "вправо", "вниз", "влево"};
+    public static final String[] DIR_NAMES = {"up", "right", "down", "left"};
 
-    /** Долей клетки в одной клетке — целочисленно, чтобы сервер и клиент считали одинаково. */
+    
     public static final int UNITS = 1024;
 
     public final int id;
@@ -23,11 +23,17 @@ public final class SnakeState {
     public final int color;
     public final boolean bot;
 
-    /** Тело: голова — первый элемент. */
+    
     public final Deque<Cell> body = new ArrayDeque<>();
 
     public int dir = RIGHT;
-    /** Накопитель движения в долях клетки (0..UNITS). */
+    
+
+
+
+
+    public int pendingDir = -1;
+    
     public int acc;
     public int score;
     public int grow;
@@ -48,10 +54,11 @@ public final class SnakeState {
         return body.size();
     }
 
-    /** Разложить змейку от головы назад, без заворота (для старта раунда). */
+    
     public void place(int hx, int hy, int direction, int length) {
         body.clear();
         dir = direction;
+        pendingDir = -1;
         for (int i = 0; i < length; i++) {
             body.addLast(new Cell(hx - DX[direction] * i, hy - DY[direction] * i));
         }

@@ -1,23 +1,23 @@
 package netcore.time;
 
-/**
- * Точный цикл тиков в отдельном потоке.
- *
- * <p>Держит расписание по абсолютным дедлайнам, поэтому не копит дрейф.
- * Если поток «проснулся» слишком поздно, догоняет не больше {@code maxCatchUp}
- * тиков, иначе пересинхронизируется — иначе игра ушла бы в спираль догонов.</p>
- *
- * <p>Последние ~1.5 мс до дедлайна крутится на месте (spin) — только так
- * на Windows можно честно держать 128 тик/с; режим отключается
- * {@link #setPrecise(boolean)}.</p>
- */
+
+
+
+
+
+
+
+
+
+
+
 public final class TickRunner implements AutoCloseable {
 
     public interface Listener {
-        /**
-         * @param tick  номер тика, начиная с 1
-         * @param lagMs насколько цикл опоздал с этим тиком
-         */
+        
+
+
+
         void onTick(int tick, double lagMs);
     }
 
@@ -69,7 +69,7 @@ public final class TickRunner implements AutoCloseable {
         running = true;
         thread = new Thread(this::loop, "netcore-tick");
         thread.setDaemon(true);
-        // не задираем приоритет: на 128 тиках спин иначе душит рендер
+        
         thread.setPriority(Thread.NORM_PRIORITY + 1);
         thread.start();
     }

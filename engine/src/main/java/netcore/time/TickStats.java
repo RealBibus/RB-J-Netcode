@@ -1,6 +1,6 @@
 package netcore.time;
 
-/** Метрики цикла тиков. */
+
 public final class TickStats {
 
     private long ticks;
@@ -51,7 +51,7 @@ public final class TickStats {
         return lastLagNanos / 1_000_000.0;
     }
 
-    /** Фактическая частота за последнюю секунду. */
+    
     public synchronized double actualRate() {
         return rate;
     }

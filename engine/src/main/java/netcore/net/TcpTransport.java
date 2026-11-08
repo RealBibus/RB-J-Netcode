@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.net.Socket;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** TCP-транспорт: один читающий поток, запись под замком. */
 public final class TcpTransport implements Transport, Runnable {
 
     private final Socket socket;
@@ -18,25 +17,38 @@ public final class TcpTransport implements Transport, Runnable {
     private final Object writeLock = new Object();
     private final AtomicInteger seq = new AtomicInteger();
     private final NetStats stats = new NetStats();
+    private final boolean compression;
 
     private volatile boolean open = true;
+    private Thread reader;
 
     public TcpTransport(Socket socket, Listener listener) throws IOException {
+        this(socket, listener, true);
+    }
+
+    public TcpTransport(Socket socket, Listener listener, boolean compression) throws IOException {
         this.socket = socket;
         this.listener = listener;
+        this.compression = compression;
         this.in = new DataInputStream(new BufferedInputStream(socket.getInputStream(), 32 * 1024));
         this.out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream(), 32 * 1024));
     }
 
     public void startReader() {
-        Thread t = new Thread(this, "netcore-read");
-        t.setDaemon(true);
-        t.start();
+        start();
+    }
+
+    @Override
+    public void start() {
+        if (reader != null) return;
+        reader = new Thread(this, "netcore-read");
+        reader.setDaemon(true);
+        reader.start();
     }
 
     @Override
     public void run() {
-        String reason = "соединение закрыто";
+        String reason = "connection closed";
         try {
             while (open) {
                 Packet p = FrameCodec.read(in);
@@ -45,7 +57,7 @@ public final class TcpTransport implements Transport, Runnable {
                 listener.onPacket(p);
             }
         } catch (IOException e) {
-            reason = e.getMessage() == null ? "ошибка сети" : e.getMessage();
+            reason = e.getMessage() == null ? "network error" : e.getMessage();
         } finally {
             close();
             listener.onClosed(reason);
@@ -57,12 +69,12 @@ public final class TcpTransport implements Transport, Runnable {
         if (!open) return;
         try {
             synchronized (writeLock) {
-                FrameCodec.write(out, packet);
+                FrameCodec.write(out, packet, compression);
             }
             stats.onOut(packet.payload.length + 5);
         } catch (IOException e) {
             close();
-            listener.onClosed("не удалось отправить: " + e.getMessage());
+            listener.onClosed("send failed: " + e.getMessage());
         }
     }
 

@@ -6,10 +6,10 @@ import javax.sound.sampled.SourceDataLine;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * Звук без внешних файлов: короткие синтезированные сигналы.
- * Если звуковой карты нет — тихо отключается.
- */
+
+
+
+
 public final class Sfx {
 
     public enum Sound { CLICK, EAT, DIE, COUNT, START, WIN, JOIN, LEAVE }
@@ -102,7 +102,7 @@ public final class Sfx {
         }
     }
 
-    /** Синус с затуханием и небольшим "квадратным" призвуком — звучит плотнее. */
+    
     private static byte[] sweep(double f0, double f1, double dur, double volume, double squareMix) {
         int n = (int) (RATE * dur);
         byte[] out = new byte[n * 2];

@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Сетевые мелочи: свои адреса, свободный порт. */
+
 public final class NetInfo {
 
     private NetInfo() {
@@ -23,7 +23,7 @@ public final class NetInfo {
         }
     }
 
-    /** Все IPv4-адреса машины в локальной сети, сначала «домашние» 192.168/10/172.16. */
+    
     public static List<Address> localAddresses() {
         List<Address> result = new ArrayList<>();
         try {
@@ -51,7 +51,7 @@ public final class NetInfo {
 
     private static volatile String previewIp;
 
-    /** Подменить адрес для скриншотов, чтобы не светить реальный. */
+    
     public static void setPreviewIp(String ip) {
         previewIp = ip;
     }
@@ -62,7 +62,7 @@ public final class NetInfo {
         return list.isEmpty() ? "127.0.0.1" : list.get(0).ip;
     }
 
-    /** Свободен ли TCP-порт на этой машине. */
+    
     public static boolean portFree(int port) {
         try (java.net.ServerSocket ss = new java.net.ServerSocket()) {
             ss.setReuseAddress(true);
@@ -73,7 +73,7 @@ public final class NetInfo {
         }
     }
 
-    /** Первый свободный порт начиная с {@code from}. */
+    
     public static int freePortFrom(int from) {
         for (int p = from; p < from + 60 && p < 65535; p++) {
             if (portFree(p)) return p;

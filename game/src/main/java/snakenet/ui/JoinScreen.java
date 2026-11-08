@@ -13,7 +13,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Экран подключения: автопоиск игр в сети и ручной ввод адреса. */
 public final class JoinScreen extends Screen {
 
     private static final int MAX_ROWS = 5;
@@ -42,7 +41,7 @@ public final class JoinScreen extends Screen {
         portField.setText(String.valueOf(app.prefs().getInt("port", 45800)));
         addField(portField, 806, 336, 150, 52, 19);
 
-        nameField = new InputField("Как тебя зовут?");
+        nameField = new InputField("What is your name?");
         nameField.setText(app.prefs().get("name", app.myName()));
         addField(nameField, 806, 422, 240, 52, 19);
 
@@ -51,9 +50,9 @@ public final class JoinScreen extends Screen {
             addHotspot(806 + i * 32 - 14, 514 - 14, 28, 28, () -> color = idx);
         }
 
-        bJoin = add(new NeonButton("ВОЙТИ В ИГРУ", NeonButton.Style.PRIMARY, 806, 542, 388, 54, this::doJoin));
-        bRefresh = add(new NeonButton("Обновить", NeonButton.Style.CHIP, 600, 204, 126, 34, this::restartScanner));
-        add(new NeonButton("Назад", NeonButton.Style.SECONDARY, 56, 44, 100, 42, () -> win.show(app.homeScreen())));
+        bJoin = add(new NeonButton("JOIN GAME", NeonButton.Style.PRIMARY, 806, 542, 388, 54, this::doJoin));
+        bRefresh = add(new NeonButton("Refresh", NeonButton.Style.CHIP, 600, 204, 126, 34, this::restartScanner));
+        add(new NeonButton("Back", NeonButton.Style.SECONDARY, 56, 44, 100, 42, () -> win.show(app.homeScreen())));
     }
 
     @Override
@@ -92,7 +91,7 @@ public final class JoinScreen extends Screen {
         servers = new ArrayList<>();
         rebuildHotspots();
         startScanner();
-        app.toast("Ищу игры в локальной сети…");
+        app.toast("Searching for games on the local network…");
     }
 
     private void rebuildHotspots() {
@@ -104,7 +103,6 @@ public final class JoinScreen extends Screen {
             double y = rowY(i);
             addHotspot(86, y, 640, 66, () -> connectTo(f.host, f.port));
         }
-        // кружки цвета
         for (int i = 0; i < 10; i++) {
             final int idx = i;
             addHotspot(806 + i * 32 - 14, 514 - 14, 28, 28, () -> color = idx);
@@ -118,7 +116,7 @@ public final class JoinScreen extends Screen {
     private void doJoin() {
         String raw = hostField.getText().trim();
         if (raw.isEmpty()) {
-            app.toastError("Введи адрес: например 192.168.0.5");
+            app.toastError("Enter an address, for example 192.168.0.5");
             return;
         }
         String host = raw;
@@ -142,11 +140,11 @@ public final class JoinScreen extends Screen {
         } catch (IOException e) {
             String msg = e.getMessage() == null ? "" : e.getMessage();
             if (msg.toLowerCase().contains("refused")) {
-                app.toastError("Сервер не отвечает: " + host + ":" + port);
+                app.toastError("Server is not responding: " + host + ":" + port);
             } else if (msg.toLowerCase().contains("timed out")) {
-                app.toastError("Сервер не отвечает — проверь адрес и Wi-Fi");
+                app.toastError("Server is not responding — check the address and Wi-Fi");
             } else {
-                app.toastError("Не удалось подключиться: " + msg);
+                app.toastError("Could not connect: " + msg);
             }
         }
     }
@@ -162,12 +160,11 @@ public final class JoinScreen extends Screen {
 
     @Override
     protected void paintScreen(Graphics2D g) {
-        Brush.text(g, "Подключиться", 56, 136, Theme.display(42), Theme.TEXT);
-        Brush.text(g, "Найди игру в локальной сети или введи адрес хоста", 58, 166, Theme.font(15), Theme.MUTED);
+        Brush.text(g, "Join game", 56, 136, Theme.display(42), Theme.TEXT);
+        Brush.text(g, "Find a game on the local network or enter the host address", 58, 166, Theme.font(15), Theme.MUTED);
 
-        // левая карточка: найденные игры
         Brush.panel(g, 56, 196, 700, 440, 26);
-        Brush.text(g, "ИГРЫ РЯДОМ", 86, 232, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "GAMES NEARBY", 86, 232, Theme.semibold(11), Theme.MUTED);
 
         List<LanDiscovery.Found> list = servers;
         if (list.isEmpty()) {
@@ -179,9 +176,9 @@ public final class JoinScreen extends Screen {
             g.setStroke(new BasicStroke(2f));
             g.draw(new Ellipse2D.Double(cx - 34, cy - 34, 68, 68));
             Brush.centered(g, "…", cx, cy + 10, Theme.display(30), Theme.MUTED);
-            Brush.centered(g, scannerOk ? "Пока никого не видно" : "Автопоиск недоступен",
+            Brush.centered(g, scannerOk ? "No games visible yet" : "Auto-discovery unavailable",
                     cx, cy + 74, Theme.semibold(18), Theme.DIM);
-            Brush.centered(g, scannerOk ? "Создай игру у себя или введи адрес справа" : "Введи адрес и порт вручную справа",
+            Brush.centered(g, scannerOk ? "Host a game or enter the address on the right" : "Enter the address and port manually on the right",
                     cx, cy + 100, Theme.font(14), Theme.MUTED);
         } else {
             int n = Math.min(MAX_ROWS, list.size());
@@ -209,12 +206,11 @@ public final class JoinScreen extends Screen {
             }
         }
 
-        // правая карточка: ручное подключение
         Brush.panel(g, 776, 196, 448, 440, 26);
-        Brush.text(g, "ВРУЧНУЮ", 806, 232, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "ПОРТ", 806, 322, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "ИМЯ", 806, 408, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "ЦВЕТ", 806, 494, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "MANUAL", 806, 232, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "PORT", 806, 322, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "NAME", 806, 408, Theme.semibold(11), Theme.MUTED);
+        Brush.text(g, "COLOR", 806, 494, Theme.semibold(11), Theme.MUTED);
 
         for (int i = 0; i < 10; i++) {
             double cx = 806 + i * 32;

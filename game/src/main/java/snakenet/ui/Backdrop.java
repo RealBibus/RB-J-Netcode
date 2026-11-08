@@ -10,7 +10,7 @@ import java.awt.geom.Point2D;
 import java.awt.image.BufferedImage;
 import java.util.Random;
 
-/** Фон: тёмный градиент, редкая сетка точек и виньетка. Без бегающих пятен. */
+
 public final class Backdrop {
 
     private final float[][] dots = new float[26][2];
@@ -40,7 +40,7 @@ public final class Backdrop {
         g.setPaint(new GradientPaint(0, 0, Theme.BG, 0, h, Theme.BG2));
         g.fillRect(0, 0, w, h);
 
-        // тонкая сетка точек по углам клеток
+        
         int step = 32;
         g.setColor(new Color(255, 255, 255, 8));
         for (int y = step / 2; y < h; y += step) {
@@ -65,7 +65,7 @@ public final class Backdrop {
         if (w <= 0 || h <= 0) return;
         g.drawImage(base(w, h), 0, 0, null);
 
-        // редкие мелкие «пылинки», чуть мерцают
+        
         for (float[] d : dots) {
             double tw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(t * 0.8 + d[0] * 9));
             g.setColor(new Color(241, 234, 222, (int) (8 + tw * 16)));

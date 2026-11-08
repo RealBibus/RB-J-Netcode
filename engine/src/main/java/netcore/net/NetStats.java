@@ -1,6 +1,6 @@
 package netcore.net;
 
-/** Метрики соединения. */
+
 public final class NetStats {
 
     private volatile long packetsIn;

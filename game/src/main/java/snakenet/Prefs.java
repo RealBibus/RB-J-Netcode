@@ -7,7 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
 
-/** Настройки, которые переживают перезапуск: ник, цвет, порт, звук. */
+
 public final class Prefs {
 
     private final Path file;
@@ -24,7 +24,7 @@ public final class Prefs {
         } catch (IOException ignored) {
         }
         if (!props.containsKey("name")) {
-            props.setProperty("name", "Игрок" + (int) (Math.random() * 90 + 10));
+            props.setProperty("name", "Player" + (int) (Math.random() * 90 + 10));
         }
     }
 
@@ -44,7 +44,7 @@ public final class Prefs {
         return Boolean.parseBoolean(props.getProperty(key, String.valueOf(def)));
     }
 
-    /** Подменить значение только для превью (на диск не пишется). */
+    
     public void setPreview(String key, String value) {
         props.setProperty(key, value);
     }

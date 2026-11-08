@@ -6,19 +6,19 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 
-/**
- * Клиентское предсказание и сверка с сервером.
- *
- * <p>Схема классическая: клиент запоминает свои вводы с номерами, применяет их
- * локально сразу, а когда приходит авторитетный снимок — откатывается к нему,
- * применяет заново все вводы, которые сервер ещё не подтвердил, и сравнивает
- * результат с тем, что предсказывал на тот же тик.</p>
- *
- * <p>Если расхождение больше {@link PredictionConfig#snapThreshold()}, это
- * «тпха»: поза мгновенно переносится к серверной, счётчик {@link #snaps()}
- * растёт, а UI может мигнуть. Мелкие расхождения сглаживаются через
- * {@link SimModel#lerp}.</p>
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
 public final class Predictor<S> {
 
     private final SimModel<S> model;
@@ -59,7 +59,7 @@ public final class Predictor<S> {
         return predicted != null;
     }
 
-    /** Записать ввод и сразу просимулировать до его тика. */
+    
     public synchronized InputCommand push(int action, int tick, float sub) {
         if (predicted == null) return null;
         InputCommand cmd = new InputCommand(nextSeq++, Math.max(tick, predictedTick), sub, action);
@@ -68,10 +68,10 @@ public final class Predictor<S> {
         return cmd;
     }
 
-    /**
-     * Сервер сказал, на каком тике он реально применил ввод. Правим метку,
-     * чтобы переигровка шла по серверному таймлайну, а не по нашему прогнозу.
-     */
+    
+
+
+
     public synchronized void retime(int seq, int applyTick) {
         for (InputCommand c : pending) {
             if (c.seq != seq) continue;
@@ -80,12 +80,12 @@ public final class Predictor<S> {
         }
     }
 
-    /** Просимулировать до тика включительно. */
+    
     public synchronized S advanceTo(int tick) {
         if (predicted == null) return null;
         if (tick <= predictedTick) return predicted;
         if (tick - predictedTick > 64) {
-            // защита от прыжка времени: лучше подождать сервер, чем просимулировать сотни тиков
+            
             tick = predictedTick + 64;
         }
         while (predictedTick < tick) {
@@ -98,14 +98,14 @@ public final class Predictor<S> {
         return predicted;
     }
 
-    /** Пришёл авторитетный снимок сервера. */
+    
     public synchronized Correction onServerState(int serverTick, int ackSeq, S state) {
         if (predicted == null) {
             reset(state, serverTick, ackSeq);
             return Correction.NONE;
         }
-        // если сервер уже дальше, чем мы успели просимулировать — догоняем,
-        // иначе сравнивать не с чем
+        
+        
         if (serverTick > predictedTick) {
             advanceTo(serverTick);
         }
@@ -170,7 +170,7 @@ public final class Predictor<S> {
         return predicted;
     }
 
-    /** Предсказанное состояние на конкретном тике (для интерполяции рендера). */
+    
     public synchronized S stateAt(int tick) {
         return history.get(tick);
     }

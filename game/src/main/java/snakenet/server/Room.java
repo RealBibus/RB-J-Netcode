@@ -23,18 +23,18 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
-/**
- * Игровая комната поверх движка: лобби, отсчёт, раунд, итоги.
- *
- * <p>Симуляция живёт в {@link netcore.time.TickRunner}: частота задаётся
- * настройками (16..128), скорость змейки — в клетках в секунду, поэтому
- * тикрейт не влияет на геймплей, только на отзывчивость.</p>
- */
+
+
+
+
+
+
+
 public final class Room {
 
     public enum Phase { LOBBY, COUNT, RUNNING, OVER }
 
-    /** Ввод клиента: номер, тик, доля тика, направление. */
+    
     private static final class Input {
         final int seq;
         final int tick;
@@ -62,6 +62,8 @@ public final class Room {
         final List<Input> inputs = new ArrayList<>();
         int ackSeq;
         String token = "";
+        volatile boolean reconnecting;
+        long reconnectDeadline;
 
         Player(int id, String name, int color, boolean bot, netcore.net.Connection connection) {
             this.id = id;
@@ -73,11 +75,12 @@ public final class Room {
     }
 
     private static final String[] BOT_NAMES = {
-            "Бот Вася", "Бот Люся", "Бот Гоша", "Бот Кобра",
-            "Бот Питон", "Бот Удав", "Бот Гадюка", "Бот Спайк"
+            "Bot Vasya", "Bot Lucy", "Bot Gosha", "Bot Cobra",
+            "Bot Python", "Bot Boa", "Bot Viper", "Bot Spike"
     };
 
     private static final int SPAWN_LEN = 4;
+    private static final long RECONNECT_GRACE_MS = 30_000L;
 
     private final GameServer server;
     private final GameConfig cfg;
@@ -92,7 +95,7 @@ public final class Room {
     private netcore.time.TickRunner runner;
     private Phase phase = Phase.LOBBY;
     private int tick;
-    /** Смещение нумерации: тик обязан монотонно расти между раундами и перезапусками цикла. */
+    
     private int tickBase;
     private int lastRunnerTick;
     private int countTicksLeft;
@@ -148,6 +151,7 @@ public final class Room {
             lastRunnerTick = tickNumber;
             tick = tickBase + tickNumber;
             try {
+                expireReconnects();
                 if (phase == Phase.COUNT) countdownTick();
                 else if (phase == Phase.RUNNING) gameTick();
             } catch (Throwable t) {
@@ -156,39 +160,66 @@ public final class Room {
         }
     }
 
-    // ------------------------------------------------------------------
-    // подключение / отключение
-    // ------------------------------------------------------------------
+    private void expireReconnects() {
+        long now = System.currentTimeMillis();
+        List<Integer> gone = null;
+        for (Player p : players) {
+            if (p.reconnecting && p.reconnectDeadline > 0 && now >= p.reconnectDeadline) {
+                if (gone == null) gone = new ArrayList<>();
+                gone.add(p.id);
+            }
+        }
+        if (gone != null) {
+            for (int id : gone) leave(id);
+        }
+    }
+
+    
+    
+    
 
     synchronized void onConnect(netcore.net.Connection connection) {
-        // игрок появится после HELLO
+        
     }
 
     synchronized void onDisconnect(netcore.net.Connection connection) {
         Player p = connection.attachment instanceof Player ? (Player) connection.attachment : null;
-        if (p != null) leave(p.id);
+        if (p == null || p.connection != connection) return;
+        p.connection = null;
+        if (phase == Phase.LOBBY) {
+            leave(p.id);
+            return;
+        }
+        p.reconnecting = true;
+        p.reconnectDeadline = System.currentTimeMillis() + RECONNECT_GRACE_MS;
+        if (!p.bot) system(p.name + " lost connection");
+        broadcastLobby();
     }
 
     synchronized void onJoin(netcore.net.Connection connection, String rawName, int color, String token) {
         if (closed) return;
-        // тот же игрок переподключился (оборвался UDP, перезашёл) — старую сессию выкидываем,
-        // иначе он двоится: старая висит до таймаута, новая уже в игре
+        Player attached = connection.attachment instanceof Player ? (Player) connection.attachment : null;
+        if (attached != null) {
+            
+            
+            resendWelcome(connection, attached);
+            return;
+        }
         if (token != null && !token.isEmpty()) {
             Player old = byToken.get(token);
-            if (old != null && old.connection != connection) {
-                String oldName = old.name;
-                if (old.connection != null) {
-                    server.send(old.connection, Wire.encode(List.of(
-                            Msg.of(Protocol.KICK).putStr("msg", "Сессия открыта в другом окне"))));
-                    old.connection.close();
+            if (old != null) {
+                if (old.connection == connection) {
+                    connection.attachment = old;
+                    resendWelcome(connection, old);
+                } else {
+                    resume(old, connection);
                 }
-                leave(old.id);
-                system(oldName + ": сессия переподключилась");
+                return;
             }
         }
         if (players.size() >= cfg.maxPlayers) {
             server.send(connection, Wire.encode(List.of(
-                    Msg.of(Protocol.ERR).putStr("msg", "Лобби заполнено"))));
+                    Msg.of(Protocol.ERR).putStr("msg", "Lobby is full"))));
             connection.close();
             return;
         }
@@ -200,6 +231,38 @@ public final class Room {
         if (!p.token.isEmpty()) byToken.put(p.token, p);
         connection.attachment = p;
 
+        resendWelcome(connection, p);
+        broadcastLobby();
+        system(name + " joined");
+    }
+
+    
+
+
+
+
+    private void resume(Player p, netcore.net.Connection connection) {
+        netcore.net.Connection prev = p.connection;
+        if (prev != null && prev.attachment == p) prev.attachment = null;
+        p.connection = connection;
+        p.reconnecting = false;
+        p.reconnectDeadline = 0;
+        connection.attachment = p;
+        p.inputs.clear();
+        p.ackSeq = 0;
+
+        if (prev != null && prev != connection) {
+            server.send(prev, Wire.encode(List.of(
+                    Msg.of(Protocol.KICK).putStr("msg", "Session resumed in another window"))));
+            prev.close();
+        }
+        resendWelcome(connection, p);
+        system(p.name + " reconnected");
+        broadcastLobby();
+    }
+
+    
+    private void resendWelcome(netcore.net.Connection connection, Player p) {
         List<Msg> hello = new ArrayList<>();
         hello.add(Msg.of(Protocol.WELCOME)
                 .put("pid", p.id)
@@ -211,12 +274,12 @@ public final class Room {
 
         if (phase == Phase.COUNT || phase == Phase.RUNNING) {
             server.send(connection, Wire.encode(startFrame()));
+            if (phase == Phase.RUNNING) {
+                server.send(connection, Wire.encode(snapshotFrame()));
+            }
         } else if (phase == Phase.OVER && !lastOver.isEmpty()) {
             server.send(connection, Wire.encode(lastOver));
         }
-
-        broadcastLobby();
-        system(name + " подключился");
     }
 
     synchronized void leave(int playerId) {
@@ -234,7 +297,10 @@ public final class Room {
             }
             p.snake.alive = false;
         }
-        if (!p.bot) system(p.name + " отключился");
+        if (!p.bot) {
+            if (phase == Phase.LOBBY) system(p.name + " left");
+            else system(p.name + " disconnected");
+        }
         broadcastLobby();
         if (phase == Phase.RUNNING) {
             checkEnd();
@@ -261,31 +327,39 @@ public final class Room {
         return p != null && !p.bot && p.id == hostId();
     }
 
+    
+    private static int pingMs(Player p) {
+        if (p.bot) return -1;
+        netcore.net.Connection c = p.connection;
+        return c == null ? -1 : c.rttMs();
+    }
+
     public synchronized int hostId() {
         for (Player p : players) if (!p.bot) return p.id;
         return -1;
     }
 
-    // ------------------------------------------------------------------
-    // сообщения от клиентов
-    // ------------------------------------------------------------------
+    
+    
+    
 
     synchronized void onMessage(netcore.net.Connection connection, List<Msg> frame) {
         boolean restart = handleMessages(connection, frame);
-        // перезапуск тика — только после выхода из-под замка комнаты,
-        // иначе поток тика не сможет войти в onTick и stop() будет ждать
+        
+        
         if (restart) {
             restartRunner();
         }
     }
 
-    /** @return true, если нужно перезапустить цикл тиков (сменился тикрейт) */
+    
     private boolean handleMessages(netcore.net.Connection connection, List<Msg> frame) {
-        Player p = connection.attachment instanceof Player ? (Player) connection.attachment : null;
         boolean restart = false;
         for (Msg m : frame) {
+            Player p = connection.attachment instanceof Player ? (Player) connection.attachment : null;
             if (m.is(Protocol.HELLO)) {
                 if (p == null) onJoin(connection, m.str("name"), m.num("color", 0), m.str("token"));
+                else resendWelcome(connection, p);
                 continue;
             }
             if (p == null) continue;
@@ -326,21 +400,21 @@ public final class Room {
         return restart;
     }
 
-    /** Хост выкидывает игрока: отправляем сообщение и рвём соединение. */
+    
     private void kick(Player host, int targetId) {
         Player target = byId.get(targetId);
         if (target == null || target.id == host.id || target.bot) return;
         if (target.connection != null) {
             server.send(target.connection, Wire.encode(List.of(
-                    Msg.of(Protocol.KICK).putStr("msg", "Хост выкинул тебя из игры"))));
+                    Msg.of(Protocol.KICK).putStr("msg", "The host kicked you from the game"))));
             target.connection.close();
         }
         String name = target.name;
         leave(target.id);
-        system(name + " выкинут хостом");
+        system(name + " was kicked by the host");
     }
 
-    /** Голос: подставляем id говорящего и раздаём остальным без подтверждений. */
+    
     synchronized void onVoice(netcore.net.Connection connection, byte[] payload) {
         Player p = connection.attachment instanceof Player ? (Player) connection.attachment : null;
         if (p == null || payload.length < 4 || phase == Phase.LOBBY) return;
@@ -393,7 +467,7 @@ public final class Room {
         return restart;
     }
 
-    /** Смена тикрейта перезапускает цикл — в лобби это безопасно. */
+    
     private void restartRunner() {
         netcore.time.TickRunner old;
         synchronized (this) {
@@ -432,9 +506,9 @@ public final class Room {
         }
     }
 
-    // ------------------------------------------------------------------
-    // лобби / раунд
-    // ------------------------------------------------------------------
+    
+    
+    
 
     private void startCountdown() {
         if (phase != Phase.LOBBY && phase != Phase.OVER) return;
@@ -526,7 +600,7 @@ public final class Room {
             p.inputs.clear();
         }
         broadcastLobby();
-        system("Возвращаемся в лобби");
+        system("Back to the lobby");
     }
 
     private void endGame() {
@@ -586,14 +660,14 @@ public final class Room {
         return true;
     }
 
-    // ------------------------------------------------------------------
-    // игровой тик
-    // ------------------------------------------------------------------
+    
+    
+    
 
     private void gameTick() {
         events.clear();
 
-        // 1. ввод игроков: применяем всё, что «дозрело» до этого тика
+        
         for (Player p : players) {
             SnakeState s = p.snake;
             if (s == null || !s.alive) {
@@ -617,23 +691,23 @@ public final class Room {
                 it.remove();
             }
             if (chosen != null && !SnakeState.isOpposite(chosen.dir, s.dir)) {
-                s.dir = chosen.dir;
+                s.pendingDir = chosen.dir;
             }
             if (acks != null && p.connection != null) {
                 server.send(p.connection, Wire.encode(acks));
             }
         }
 
-        // 2. боты
+        
         Set<Integer> occupiedForBots = occupancy(Collections.emptySet());
         for (Player p : players) {
             SnakeState s = p.snake;
             if (s == null || !s.alive || !s.bot) continue;
             int d = BotBrain.decide(s, cfg.cols, cfg.rows, cfg.walls, occupiedForBots, foods, rnd);
-            if (!SnakeState.isOpposite(d, s.dir)) s.dir = d;
+            if (!SnakeState.isOpposite(d, s.dir)) s.pendingDir = d;
         }
 
-        // 3. кто двигается в этом тике (накопитель долей клетки)
+        
         List<Player> movers = new ArrayList<>();
         int units = cfg.unitsPerTick();
         for (Player p : players) {
@@ -708,12 +782,18 @@ public final class Room {
             s.body.addFirst(e.getValue());
             if (s.grow > 0) s.grow--;
             else s.body.removeLast();
+            
+            
+            if (s.pendingDir >= 0) {
+                s.dir = s.pendingDir;
+                s.pendingDir = -1;
+            }
         }
 
         for (Player p : dying) kill(p);
     }
 
-    /** Занятые клетки; хвосты змей, которые двигаются и не растут, освобождаются. */
+    
     private Set<Integer> occupancy(Set<Player> movers) {
         Set<Integer> set = new HashSet<>();
         for (Player p : players) {
@@ -762,11 +842,11 @@ public final class Room {
         if (alive <= threshold) endGame();
     }
 
-    // ------------------------------------------------------------------
-    // рассылки
-    // ------------------------------------------------------------------
+    
+    
+    
 
-    private void broadcastSnapshot() {
+    private List<Msg> snapshotFrame() {
         List<Msg> frame = new ArrayList<>();
         frame.add(Msg.of(Protocol.SNAP)
                 .put("t", tick)
@@ -787,7 +867,8 @@ public final class Room {
                     .put("d", s.dir)
                     .put("c", p.color)
                     .put("ac", s.acc)
-                    .put("ls", p.ackSeq);
+                    .put("ls", p.ackSeq)
+                    .put("pg", pingMs(p));
             StringBuilder sb = new StringBuilder(s.body.size() * 7);
             for (Cell c : s.body) {
                 if (sb.length() > 0) sb.append(',');
@@ -796,8 +877,12 @@ public final class Room {
             m.put("g", sb.toString());
             frame.add(m);
         }
-        server.broadcastUnreliable(Wire.encode(frame));
         events.clear();
+        return frame;
+    }
+
+    private void broadcastSnapshot() {
+        server.broadcastUnreliable(Wire.encode(snapshotFrame()));
     }
 
     void broadcastLobby() {
@@ -815,7 +900,9 @@ public final class Room {
                     .put("ready", p.ready ? 1 : 0)
                     .put("bot", p.bot ? 1 : 0)
                     .put("host", isHost(p) ? 1 : 0)
-                    .put("alive", p.snake == null ? 1 : (p.snake.alive ? 1 : 0));
+                    .put("alive", p.snake == null ? 1 : (p.snake.alive ? 1 : 0))
+                    .put("rc", p.reconnecting ? 1 : 0)
+                    .put("pg", pingMs(p));
             m.putStr("name", p.name);
             frame.add(m);
         }

@@ -1,6 +1,6 @@
 package snakenet.game;
 
-/** Клетка поля. */
+
 public final class Cell {
     public final int x;
     public final int y;

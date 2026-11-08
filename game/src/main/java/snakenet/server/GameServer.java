@@ -8,10 +8,10 @@ import snakenet.net.Wire;
 
 import java.io.IOException;
 
-/**
- * Игровой сервер змейки: тонкая обёртка над {@link NetServer} движка.
- * Вся игровая логика — в {@link Room}.
- */
+
+
+
+
 public final class GameServer {
 
     private final String name;
@@ -22,9 +22,11 @@ public final class GameServer {
     private volatile String lastError;
 
     public GameServer(int port, String name, GameConfig cfg) {
-        this.name = name == null || name.isBlank() ? "Игра" : name;
+        this.name = name == null || name.isBlank() ? "Game" : name;
         this.room = new Room(this, cfg);
-        this.net = new NetServer(port, cfg.udp ? netcore.net.NetConfig.udp(false) : netcore.net.NetConfig.tcp(),
+        this.net = new NetServer(port, cfg.udp
+                ? netcore.net.NetConfig.udp(false).withDeadAfter(4000)
+                : netcore.net.NetConfig.tcp().withDeadAfter(4000),
                 new NetServer.Listener() {
             @Override
             public void onConnect(Connection connection) {
@@ -79,12 +81,12 @@ public final class GameServer {
         net.broadcast(payload, true);
     }
 
-    /** Снимки состояния: в UDP не досылаем, потеря не критична. */
+    
     void broadcastUnreliable(byte[] payload) {
         net.broadcast(payload, false);
     }
 
-    /** Голос — тоже без подтверждений, но и без себя самого. */
+    
     void broadcastVoice(byte[] payload, Connection except) {
         for (Connection c : net.connections()) {
             if (c != except && c.isOpen()) c.send(payload, false);

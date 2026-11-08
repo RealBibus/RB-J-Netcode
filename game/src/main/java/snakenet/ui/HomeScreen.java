@@ -11,7 +11,6 @@ import java.awt.geom.Line2D;
 import java.awt.geom.Rectangle2D;
 import java.util.List;
 
-/** Главный экран: пульт сессии, телеметрия и журнал. */
 public final class HomeScreen extends Screen {
 
     private final InputField nameField;
@@ -21,8 +20,8 @@ public final class HomeScreen extends Screen {
     private final NeonButton bFirewall;
 
     private final Graph gFps = new Graph("FPS", "", 160);
-    private final Graph gFrame = new Graph("КАДР", "мс", 160);
-    private final Graph gMem = new Graph("ПАМЯТЬ", "МБ", 160);
+    private final Graph gFrame = new Graph("FRAME", "ms", 160);
+    private final Graph gMem = new Graph("MEMORY", "MB", 160);
     private double sampleTimer;
     private double frameMs = 16.0;
     private double fpsSmoothed = 60;
@@ -30,26 +29,26 @@ public final class HomeScreen extends Screen {
     public HomeScreen(App app) {
         super(app);
 
-        nameField = new InputField("ник");
+        nameField = new InputField("name");
         nameField.setText(app.prefs().get("name", app.myName()));
         addField(nameField, 56, 126, 300, 38, 13);
 
-        bCreate = add(new NeonButton("Создать игру", NeonButton.Style.PRIMARY, 56, 186, 248, 50, () -> {
+        bCreate = add(new NeonButton("Create game", NeonButton.Style.PRIMARY, 56, 186, 248, 50, () -> {
             app.setNameAndColor(nameField.getText(), app.myColor());
             win.show(app.hostScreen());
         }));
-        bJoin = add(new NeonButton("Подключиться", NeonButton.Style.SECONDARY, 316, 186, 248, 50, () -> {
+        bJoin = add(new NeonButton("Join game", NeonButton.Style.SECONDARY, 316, 186, 248, 50, () -> {
             app.setNameAndColor(nameField.getText(), app.myColor());
             win.show(app.joinScreen());
         }));
         bSound = add(new NeonButton("", NeonButton.Style.CHIP, 56, 252, 120, 28, this::toggleSound));
-        bFirewall = add(new NeonButton("брандмауэр", NeonButton.Style.CHIP, 184, 252, 120, 28, () ->
-                app.toast("Если друзья не видят игру — запусти allow-firewall.bat от админа")));
+        bFirewall = add(new NeonButton("firewall", NeonButton.Style.CHIP, 184, 252, 120, 28, () ->
+                app.toast("If friends cannot see your game, run allow-firewall.bat as administrator")));
         updateSoundLabel();
     }
 
     private void updateSoundLabel() {
-        bSound.label = Sfx.isEnabled() ? "звук: вкл" : "звук: выкл";
+        bSound.label = Sfx.isEnabled() ? "sound: on" : "sound: off";
         bSound.selected = Sfx.isEnabled();
     }
 
@@ -101,27 +100,27 @@ public final class HomeScreen extends Screen {
     }
 
     private void paintSession(Graphics2D g) {
-        Brush.panelTitled(g, 32, 64, 560, 266, "СЕССИЯ");
+        Brush.panelTitled(g, 32, 64, 560, 266, "SESSION");
 
-        Brush.text(g, "ИМЯ ИГРОКА", 56, 118, Theme.font(10), Theme.MUTED);
+        Brush.text(g, "PLAYER NAME", 56, 118, Theme.font(10), Theme.MUTED);
 
-        Brush.text(g, "СОЗДАТЬ СЕРВЕР НА ЭТОМ КОМПЬЮТЕРЕ", 56, 178, Theme.font(10), Theme.MUTED);
-        Brush.text(g, "ИЛИ ЗАЙТИ ПО АДРЕСУ ХОСТА", 316, 178, Theme.font(10), Theme.MUTED);
+        Brush.text(g, "HOST A SERVER ON THIS COMPUTER", 56, 178, Theme.font(10), Theme.MUTED);
+        Brush.text(g, "OR JOIN BY HOST ADDRESS", 316, 178, Theme.font(10), Theme.MUTED);
 
-        Brush.text(g, "K — голос в игре,  ESC — меню,  стрелки/WASD — поворот",
+        Brush.text(g, "K — voice in game,  ESC — menu,  arrows/WASD — turn",
                 56, 306, Theme.font(11), Theme.DIM);
     }
 
     private void paintSystem(Graphics2D g) {
-        Brush.panelTitled(g, 32, 346, 560, 430, "СИСТЕМА");
+        Brush.panelTitled(g, 32, 346, 560, 430, "SYSTEM");
 
         String[][] rows = {
                 {"java", System.getProperty("java.version")},
                 {"os", System.getProperty("os.name")},
-                {"адрес", NetInfo.primaryIp()},
-                {"порт по умолчанию", String.valueOf(app.prefs().getInt("port", 45800))},
-                {"движок", "netcore " + netcore.NetCore.VERSION + " (UDP/TCP)"},
-                {"микрофон", app.voice() == null ? "не подключён" : (app.voice().micOk() ? "ок" : "нет устройства")},
+                {"address", NetInfo.primaryIp()},
+                {"default port", String.valueOf(app.prefs().getInt("port", 45800))},
+                {"engine", "netcore " + netcore.NetCore.VERSION + " (UDP/TCP)"},
+                {"microphone", app.voice() == null ? "not connected" : (app.voice().micOk() ? "ok" : "no device")},
         };
         double y = 400;
         for (String[] row : rows) {
@@ -134,18 +133,18 @@ public final class HomeScreen extends Screen {
     }
 
     private void paintTelemetry(Graphics2D g) {
-        Brush.panelTitled(g, 616, 64, 632, 394, "ТЕЛЕМЕТРИЯ  //  РЕНДЕР");
+        Brush.panelTitled(g, 616, 64, 632, 394, "TELEMETRY  //  RENDER");
 
         gFps.paint(g, 636, 104, 592, 84, Theme.ACCENT, 144);
         gFrame.paint(g, 636, 198, 592, 84, Theme.ACCENT2, 50);
         gMem.paint(g, 636, 292, 592, 84, Theme.YELLOW, 1024);
 
-        Brush.text(g, "графики обновляются 6 раз в секунду; значения — с этого процесса",
+        Brush.text(g, "charts refresh 6 times per second; values come from this process",
                 636, 430, Theme.font(10), Theme.MUTED);
     }
 
     private void paintLog(Graphics2D g) {
-        Brush.panelTitled(g, 616, 474, 632, 302, "ЖУРНАЛ");
+        Brush.panelTitled(g, 616, 474, 632, 302, "LOG");
         List<String> lines = app.logLines();
         int from = Math.max(0, lines.size() - 13);
         double y = 512;
@@ -155,7 +154,7 @@ public final class HomeScreen extends Screen {
             y += 21;
         }
         if (lines.isEmpty()) {
-            Brush.text(g, "пока пусто — создай игру или подключись", 636, 520, Theme.font(11), Theme.MUTED);
+            Brush.text(g, "nothing yet — create a game or join one", 636, 520, Theme.font(11), Theme.MUTED);
         }
     }
 }

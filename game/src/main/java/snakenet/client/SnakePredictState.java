@@ -3,16 +3,17 @@ package snakenet.client;
 import netcore.predict.InputCommand;
 import netcore.predict.SimModel;
 
-/**
- * Состояние для предсказания: только своя змейка. Чужие змейки и еду клиент
- * не предсказывает — их присылает сервер.
- */
+
+
+
+
 public final class SnakePredictState {
 
     public int[] xs;
     public int[] ys;
     public int dir;
     public int acc;
+    public int pendingDir = -1;
     public boolean alive;
 
     public SnakePredictState(int[] xs, int[] ys, int dir, int acc, boolean alive) {
@@ -28,7 +29,9 @@ public final class SnakePredictState {
     }
 
     public SnakePredictState copy() {
-        return new SnakePredictState(xs.clone(), ys.clone(), dir, acc, alive);
+        SnakePredictState s = new SnakePredictState(xs.clone(), ys.clone(), dir, acc, alive);
+        s.pendingDir = pendingDir;
+        return s;
     }
 
     public int length() {
@@ -43,7 +46,7 @@ public final class SnakePredictState {
         return ys.length == 0 ? 0 : ys[0];
     }
 
-    /** Детерминированная модель движения — та же арифметика, что на сервере. */
+    
     public static final class Model implements SimModel<SnakePredictState> {
 
         private final int cols;
@@ -66,8 +69,9 @@ public final class SnakePredictState {
         @Override
         public SnakePredictState step(SnakePredictState state, InputCommand input) {
             SnakePredictState s = state.copy();
+            
             if (input != null && input.action >= 0 && !isOpposite(input.action, s.dir)) {
-                s.dir = input.action;
+                s.pendingDir = input.action;
             }
             if (!s.alive || s.xs.length == 0) return s;
 
@@ -93,6 +97,10 @@ public final class SnakePredictState {
             }
             s.xs[0] = nx;
             s.ys[0] = ny;
+            if (s.pendingDir >= 0) {
+                s.dir = s.pendingDir;
+                s.pendingDir = -1;
+            }
             return s;
         }
 

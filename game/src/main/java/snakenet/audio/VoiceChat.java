@@ -14,18 +14,18 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
-/**
- * Голосовой чат: захват с микрофона, отправка кадрами по 20 мс и сведение
- * приходящих голосов в один поток вывода.
- *
- * <p>Формат — сырой PCM 16 кГц, моно, 16 бит. Это не WebRTC (его в чистую Java
- * без нативных библиотек не затащить), но по локальной сети разницы не слышно:
- * 32 КБ/с на говорящего.</p>
- */
+
+
+
+
+
+
+
+
 public final class VoiceChat {
 
     public static final float RATE = 16000f;
-    public static final int FRAME_SAMPLES = 320;   // 20 мс
+    public static final int FRAME_SAMPLES = 320;   
 
     private static final AudioFormat FORMAT = new AudioFormat(RATE, 16, 1, true, false);
 
@@ -153,7 +153,7 @@ public final class VoiceChat {
         if (!speakerOk) return;
         Deque<short[]> queue = jitter.computeIfAbsent(playerId, k -> new ArrayDeque<>());
         synchronized (queue) {
-            if (queue.size() > 12) queue.pollFirst();   // отстали — режем старьё
+            if (queue.size() > 12) queue.pollFirst();   
             queue.addLast(pcm);
         }
         lastHeard.put(playerId, System.currentTimeMillis());
@@ -180,7 +180,7 @@ public final class VoiceChat {
         return level;
     }
 
-    /** Кто говорит прямо сейчас. */
+    
     public int speakingCount() {
         long now = System.currentTimeMillis();
         int n = 0;

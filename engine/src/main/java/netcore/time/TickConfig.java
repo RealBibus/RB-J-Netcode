@@ -2,7 +2,7 @@ package netcore.time;
 
 import java.util.Objects;
 
-/** Настройки тика: частота 1..128 и режим. */
+
 public final class TickConfig {
 
     public static final int MIN_RATE = 1;
@@ -44,17 +44,17 @@ public final class TickConfig {
         return mode == TickMode.SUBTICK;
     }
 
-    /** Секунд на тик. */
+    
     public double dt() {
         return 1.0 / rate;
     }
 
-    /** Наносекунд на тик (с точностью до 1 нс). */
+    
     public long tickNanos() {
         return 1_000_000_000L / rate;
     }
 
-    /** Сколько тиков в секунду получает симуляция с учётом подшагов. */
+    
     public int effectiveStepsPerSecond() {
         return rate * subSteps();
     }
@@ -75,7 +75,7 @@ public final class TickConfig {
     @Override
     public String toString() {
         return mode == TickMode.SUBTICK
-                ? rate + " тик/с, subtick ×" + subSteps
-                : rate + " тик/с";
+                ? rate + " ticks/s, subtick ×" + subSteps
+                : rate + " ticks/s";
     }
 }

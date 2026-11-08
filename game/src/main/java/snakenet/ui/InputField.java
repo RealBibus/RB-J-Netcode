@@ -11,7 +11,7 @@ import java.awt.Graphics2D;
 import java.awt.Insets;
 import java.awt.RenderingHints;
 
-/** Поле ввода: скруглённая подложка, подсказка, неоновый фокус. */
+
 public final class InputField extends JTextField {
 
     private String hint;

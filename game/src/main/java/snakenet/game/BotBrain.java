@@ -4,11 +4,11 @@ import java.util.List;
 import java.util.Random;
 import java.util.Set;
 
-/**
- * Простой, но прилично выживающий бот: тянется к еде, не врезается в стены
- * и тела, слегка избегает тесных мест. Без глобального поиска пути — на 8 ботах
- * этого достаточно и это дёшево по CPU.
- */
+
+
+
+
+
 public final class BotBrain {
 
     private BotBrain() {
@@ -36,10 +36,10 @@ public final class BotBrain {
 
             double score = 0;
             if (blocked.contains(Cell.key(nx, ny, cols))) {
-                score -= 1000; // туда нельзя
+                score -= 1000; 
             }
 
-            // чем меньше свободных соседей — тем опаснее
+            
             int free = 0;
             for (int k = 0; k < 4; k++) {
                 int ax = nx + SnakeState.DX[k];
@@ -54,7 +54,7 @@ public final class BotBrain {
             }
             score += free * 12;
 
-            // расстояние до ближайшей еды
+            
             int bestDist = Integer.MAX_VALUE;
             for (Food f : foods) {
                 int dx = Math.abs(f.x - nx);
@@ -67,7 +67,7 @@ public final class BotBrain {
             }
             if (bestDist != Integer.MAX_VALUE) score += 140 - bestDist * 4.0;
 
-            if (d == s.dir) score += 8; // не дёргаться без нужды
+            if (d == s.dir) score += 8; 
             score += rnd.nextDouble() * 6;
 
             if (score > bestScore) {

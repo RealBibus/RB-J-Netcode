@@ -3,16 +3,15 @@ package snakenet.game;
 import netcore.time.TickConfig;
 import snakenet.net.Msg;
 
-/** Настройки партии: поле, скорость, тикрейт, стены. */
 public final class GameConfig {
 
-    public static final String[] SIZE_NAMES = {"Мини", "Классика", "Большое", "Арена"};
+    public static final String[] SIZE_NAMES = {"Mini", "Classic", "Large", "Arena"};
     public static final int[][] SIZE = {{24, 16}, {32, 22}, {40, 26}, {44, 18}};
 
-    public static final String[] SPEED_NAMES = {"Спокойно", "Норма", "Быстро", "Хардкор"};
+    public static final String[] SPEED_NAMES = {"Chill", "Normal", "Fast", "Insane"};
     public static final int[] SPEED_CELLS = {6, 9, 12, 15};
 
-    public static final String[] TICK_NAMES = {"16 тик", "32 тика", "64 тика", "128 тиков"};
+    public static final String[] TICK_NAMES = {"16 Hz", "32 Hz", "64 Hz", "128 Hz"};
     public static final int[] TICK_RATES = {16, 32, 64, 128};
 
     public int cols = SIZE[1][0];
@@ -24,7 +23,7 @@ public final class GameConfig {
     public int maxPlayers = 8;
     public boolean walls = true;
     public boolean udp = true;
-    public String serverName = "Игра";
+    public String serverName = "Game";
 
     public GameConfig copy() {
         GameConfig c = new GameConfig();
@@ -41,12 +40,10 @@ public final class GameConfig {
         return c;
     }
 
-    /** Тик-конфиг для движка. */
     public TickConfig tickConfig() {
         return subtick ? TickConfig.subtick(tickRate, subSteps) : TickConfig.fixed(tickRate);
     }
 
-    /** Сколько «долей клетки» змейка проходит за тик. */
     public int unitsPerTick() {
         return Math.max(1, Math.round(cellsPerSec * SnakeState.UNITS / (float) tickRate));
     }
@@ -78,16 +75,16 @@ public final class GameConfig {
 
     public String sizeLabel() {
         int i = sizeIndex();
-        return (i >= 0 ? SIZE_NAMES[i] : "Своё") + " " + cols + "×" + rows;
+        return (i >= 0 ? SIZE_NAMES[i] : "Custom") + " " + cols + "×" + rows;
     }
 
     public String speedLabel() {
         int i = speedIndex();
-        return (i >= 0 ? SPEED_NAMES[i] : "Своя") + " · " + cellsPerSec + " кл/с";
+        return (i >= 0 ? SPEED_NAMES[i] : "Custom") + " · " + cellsPerSec + " cells/s";
     }
 
     public String tickLabel() {
-        return tickRate + " тик" + (subtick ? " · subtick ×" + subSteps : "");
+        return tickRate + " Hz" + (subtick ? " · subtick ×" + subSteps : "");
     }
 
     public void applySize(int i) {
@@ -132,9 +129,8 @@ public final class GameConfig {
         return Math.max(lo, Math.min(hi, v));
     }
 
-    /** Чистим ник: без управляющих символов, не длиннее 16 знаков. */
     public static String sanitizeName(String raw) {
-        if (raw == null) return "Игрок";
+        if (raw == null) return "Player";
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < raw.length() && sb.length() < 16; i++) {
             char ch = raw.charAt(i);
@@ -142,6 +138,6 @@ public final class GameConfig {
             sb.append(ch);
         }
         String s = sb.toString().trim().replaceAll("\\s{2,}", " ");
-        return s.isEmpty() ? "Игрок" : s;
+        return s.isEmpty() ? "Player" : s;
     }
 }

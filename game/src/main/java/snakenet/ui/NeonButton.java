@@ -8,7 +8,7 @@ import java.awt.Graphics2D;
 import java.awt.Shape;
 import java.awt.geom.Rectangle2D;
 
-/** Кнопка стенда: прямоугольник, рамка в пиксель, моноширинная подпись. */
+
 public final class NeonButton {
 
     public enum Style { PRIMARY, SECONDARY, GHOST, CHIP, DANGER }

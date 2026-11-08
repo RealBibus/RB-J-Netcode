@@ -7,7 +7,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-/** Палитра «инженерного стенда»: тёмный графит, моноширинный шрифт, зелёный акцент. */
+
 public final class Theme {
 
     public static final Color BG = new Color(0x0A, 0x0C, 0x0E);
@@ -27,7 +27,7 @@ public final class Theme {
     public static final Color DANGER = new Color(0xF8, 0x51, 0x49);
     public static final Color GOLD = new Color(0xD2, 0x99, 0x22);
 
-    /** Цвета игроков: индекс приходит по сети. */
+    
     public static final Color[] PLAYER = {
             new Color(0x7E, 0xE7, 0x87),
             new Color(0x58, 0xA6, 0xFF),

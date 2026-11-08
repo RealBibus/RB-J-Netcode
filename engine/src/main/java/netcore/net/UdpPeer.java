@@ -13,14 +13,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/**
- * UDP-канал до одного пира: свои подтверждения, повторы и склейка фрагментов.
- *
- * <p>Формат датаграммы: {@code [тип:1][ackId:4][ackBits:4][тело]}.
- * Надёжные сообщения режутся на фрагменты {@code [msgId:4][фраг:1][всего:1][кусок]}
- * и повторяются, пока не придут подтверждения. Ненадёжные (снимки состояния)
- * уходят один раз: потеря не страшна, следующий снимок новее.</p>
- */
 final class UdpPeer implements Transport {
 
     static final byte T_DATA_REL = 10;
@@ -29,21 +21,25 @@ final class UdpPeer implements Transport {
     static final byte T_PONG = 13;
     static final byte T_CONNECT = 14;
     static final byte T_ACCEPT = 15;
-    /** Пустой пакет только с подтверждениями. */
     static final byte T_ACK = 16;
+    static final byte T_DATA_UNREL_Z = 17;
 
     private static final int HEADER = 1 + 4 + 4;
     private static final int FRAG_HEADER = 4 + 1 + 1;
+    private static final int FLAG_Z = 0x80;
+    private static final int COUNT_MASK = 0x7f;
 
     private static final class Outgoing {
         final int id;
         final byte[][] fragments;
+        final boolean compressed;
         long lastSent;
         int attempts;
 
-        Outgoing(int id, byte[][] fragments) {
+        Outgoing(int id, byte[][] fragments, boolean compressed) {
             this.id = id;
             this.fragments = fragments;
+            this.compressed = compressed;
         }
     }
 
@@ -55,6 +51,7 @@ final class UdpPeer implements Transport {
     private final Object lock = new Object();
     private final Map<Integer, Outgoing> pending = new LinkedHashMap<>();
     private final Map<Integer, byte[][]> incoming = new HashMap<>();
+    private final Map<Integer, Boolean> incomingCompressed = new HashMap<>();
     private final TreeMap<Integer, byte[]> ready = new TreeMap<>();
 
     private int nextId = 1;
@@ -85,12 +82,12 @@ final class UdpPeer implements Transport {
         this.onClose = onClose;
     }
 
-    void start() {
+    @Override
+    public void start() {
         ticker = new Thread(this::loop, "netcore-udp-peer");
         ticker.setDaemon(true);
         ticker.start();
         if (remote == null) {
-            // клиент: сокет только наш, читаем сами (у сервера общий цикл на всех)
             Thread reader = new Thread(this::readLoop, "netcore-udp-read");
             reader.setDaemon(true);
             reader.start();
@@ -118,7 +115,7 @@ final class UdpPeer implements Transport {
                 resend(now);
             }
             if (now - lastRecv > config.deadAfterMs() * 1_000_000L) {
-                closeWithReason("таймаут соединения");
+                closeWithReason("connection timed out");
                 return;
             }
             try {
@@ -136,16 +133,12 @@ final class UdpPeer implements Transport {
             if (now - o.lastSent < config.resendMs() * 1_000_000L) continue;
             if (o.attempts > 200) {
                 it.remove();
-                closeWithReason("не удалось доставить сообщение");
+                closeWithReason("message delivery failed");
                 return;
             }
             sendFragments(o);
         }
     }
-
-    // ------------------------------------------------------------------
-    // отправка
-    // ------------------------------------------------------------------
 
     @Override
     public void send(Packet packet) {
@@ -153,12 +146,13 @@ final class UdpPeer implements Transport {
         List<byte[]> datagrams = new ArrayList<>(1);
         synchronized (lock) {
             if (packet.type == Packet.DATA) {
-                // очень крупный снимок лучше дослать с подтверждением, чем
-                // надеяться, что IP-фрагментация доживёт
                 if (packet.reliable || packet.payload.length > 8000) {
                     queueReliable(packet.payload);
                 } else {
-                    datagrams.add(build(T_DATA_UNREL, packet.payload));
+                    byte[] packed = config.compression() ? NetCodec.compress(packet.payload) : null;
+                    datagrams.add(packed != null
+                            ? build(T_DATA_UNREL_Z, packed)
+                            : build(T_DATA_UNREL, packet.payload));
                 }
             } else {
                 datagrams.add(build(packet.type == Packet.PING ? T_PING : T_PONG, packet.payload));
@@ -168,27 +162,36 @@ final class UdpPeer implements Transport {
     }
 
     private void queueReliable(byte[] payload) {
+        byte[] packed = config.compression() ? NetCodec.compress(payload) : null;
+        boolean compressed = packed != null;
+        byte[] body = compressed ? packed : payload;
         int chunkSize = Math.max(64, config.mtu() - HEADER - FRAG_HEADER);
-        int count = Math.max(1, (payload.length + chunkSize - 1) / chunkSize);
+        int count = Math.max(1, (body.length + chunkSize - 1) / chunkSize);
+        if (count > COUNT_MASK) {
+            compressed = false;
+            body = payload;
+            count = Math.max(1, (body.length + chunkSize - 1) / chunkSize);
+        }
         byte[][] fragments = new byte[count][];
         for (int i = 0; i < count; i++) {
             int from = i * chunkSize;
-            int to = Math.min(payload.length, from + chunkSize);
+            int to = Math.min(body.length, from + chunkSize);
             byte[] f = new byte[to - from];
-            System.arraycopy(payload, from, f, 0, f.length);
+            System.arraycopy(body, from, f, 0, f.length);
             fragments[i] = f;
         }
-        Outgoing o = new Outgoing(nextId++, fragments);
+        Outgoing o = new Outgoing(nextId++, fragments, compressed);
         pending.put(o.id, o);
         sendFragments(o);
     }
 
     private void sendFragments(Outgoing o) {
+        int count = o.fragments.length | (o.compressed ? FLAG_Z : 0);
         for (int i = 0; i < o.fragments.length; i++) {
             byte[] f = o.fragments[i];
             ByteBuffer b = ByteBuffer.allocate(HEADER + FRAG_HEADER + f.length);
             b.put(T_DATA_REL).putInt(lastDelivered).putInt(ackBits);
-            b.putInt(o.id).put((byte) i).put((byte) o.fragments.length).put(f);
+            b.putInt(o.id).put((byte) i).put((byte) count).put(f);
             sendDatagram(b.array());
         }
         o.lastSent = System.nanoTime();
@@ -223,10 +226,6 @@ final class UdpPeer implements Transport {
         }
     }
 
-    // ------------------------------------------------------------------
-    // приём
-    // ------------------------------------------------------------------
-
     void onDatagram(byte[] data, int len) {
         if (!open || len < HEADER) return;
         lastRecv = System.nanoTime();
@@ -248,6 +247,9 @@ final class UdpPeer implements Transport {
                 case T_DATA_UNREL:
                     deliver.add(rest(b));
                     break;
+                case T_DATA_UNREL_Z:
+                    deliver.add(NetCodec.decompress(rest(b)));
+                    break;
                 case T_PING:
                     control = new Packet(Packet.PING, 0, rest(b), false);
                     break;
@@ -261,6 +263,7 @@ final class UdpPeer implements Transport {
             }
         }
         for (byte[] payload : deliver) {
+            if (payload == null) continue;
             Transport.Listener l = listener;
             if (l != null) l.onPacket(new Packet(Packet.DATA, 0, payload, true));
         }
@@ -274,22 +277,28 @@ final class UdpPeer implements Transport {
         if (b.remaining() < FRAG_HEADER) return;
         int id = b.getInt();
         int frag = b.get() & 0xff;
-        int count = b.get() & 0xff;
+        int rawCount = b.get() & 0xff;
+        boolean compressed = (rawCount & FLAG_Z) != 0;
+        int count = rawCount & COUNT_MASK;
         byte[] chunk = rest(b);
         if (id <= lastDelivered || count == 0 || frag >= count) return;
 
         byte[][] parts = incoming.computeIfAbsent(id, k -> new byte[count][]);
         if (parts.length != count) return;
         parts[frag] = chunk;
+        incomingCompressed.put(id, compressed);
         for (byte[] p : parts) if (p == null) return;
 
         incoming.remove(id);
+        Boolean z = incomingCompressed.remove(id);
         byte[] message = new byte[total(parts)];
         int pos = 0;
         for (byte[] p : parts) {
             System.arraycopy(p, 0, message, pos, p.length);
             pos += p.length;
         }
+        if (z != null && z) message = NetCodec.decompress(message);
+        if (message == null) return;
         if (id == lastDelivered + 1) {
             deliver.add(message);
             advanceAck();
@@ -300,7 +309,6 @@ final class UdpPeer implements Transport {
         }
     }
 
-    /** Подтверждаем сразу, иначе отправитель будет досылать до таймаута. */
     private void sendAckSoon() {
         long now = System.nanoTime();
         if (now - lastAckSent < 10_000_000L) return;
@@ -352,7 +360,9 @@ final class UdpPeer implements Transport {
         return out;
     }
 
-    // ------------------------------------------------------------------
+    int localPort() {
+        return socket.getLocalPort();
+    }
 
     @Override
     public boolean isOpen() {
@@ -381,7 +391,15 @@ final class UdpPeer implements Transport {
         if (ticker != null) ticker.interrupt();
         if (remote == null) socket.close();
         Transport.Listener l = listener;
-        if (l != null) l.onClosed("соединение закрыто");
+        if (l != null) l.onClosed("connection closed");
+    }
+
+    void detachAndClose() {
+        listener = null;
+        if (!open) return;
+        open = false;
+        if (ticker != null) ticker.interrupt();
+        if (remote == null) socket.close();
     }
 
     void closeWithReason(String reason) {

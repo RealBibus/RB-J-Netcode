@@ -5,15 +5,15 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * Одно сообщение протокола: тип + именованные поля.
- * Формат строки: {@code TYPE|k=v|k=v}.
- * Строковые значения кодируются в base64url, чтобы любые имена и чат
- * не ломали разделители. Числа и флаги пишутся как есть.
- */
+
+
+
+
+
+
 public final class Msg {
 
-    /** Служебная строка, закрывающая кадр (пакет из нескольких сообщений). */
+    
     public static final String END = "END";
 
     private final String type;
@@ -53,7 +53,7 @@ public final class Msg {
         return this;
     }
 
-    /** Положить строку с base64-кодированием. */
+    
     public Msg putStr(String k, String v) {
         fields.put(k, enc(v));
         return this;

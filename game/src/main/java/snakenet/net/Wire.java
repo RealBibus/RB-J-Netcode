@@ -4,12 +4,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Кадры приложения поверх движка.
- *
- * <p>Первый байт — тип кадра: 0 — текстовый протокол, 1 — голос. Голос летит
- * бинарём без base64, иначе на 16 кГц получается лишняя треть трафика.</p>
- */
+
+
+
+
+
+
 public final class Wire {
 
     public static final byte TEXT = 0;
@@ -49,7 +49,7 @@ public final class Wire {
         return data.length > 3 && data[0] == VOICE;
     }
 
-    /** Клиент -> сервер: [1][seq:2][pcm]. */
+    
     public static byte[] voice(int seq, byte[] pcm) {
         byte[] out = new byte[pcm.length + 3];
         out[0] = VOICE;
@@ -59,7 +59,7 @@ public final class Wire {
         return out;
     }
 
-    /** Сервер -> клиент: [1][pid:2][seq:2][pcm]. */
+    
     public static byte[] voiceFrom(int pid, int seq, byte[] pcm) {
         byte[] out = new byte[pcm.length + 5];
         out[0] = VOICE;

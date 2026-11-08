@@ -14,10 +14,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Сервер движка: UDP (основной) и TCP (запасной, если разрешён в {@link NetConfig}).
- * Служебные пинги отвечает сам — игре они не видны.
- */
 public final class NetServer implements AutoCloseable {
 
     public interface Listener {
@@ -33,12 +29,14 @@ public final class NetServer implements AutoCloseable {
     private final Listener listener;
     private final List<Connection> connections = new CopyOnWriteArrayList<>();
     private final Map<SocketAddress, UdpPeer> udpPeers = new ConcurrentHashMap<>();
+    private final Map<SocketAddress, Connection> udpConnections = new ConcurrentHashMap<>();
     private final AtomicInteger ids = new AtomicInteger();
 
     private ServerSocket serverSocket;
     private DatagramSocket udpSocket;
     private Thread acceptThread;
     private Thread udpThread;
+    private Thread pingThread;
     private volatile boolean running;
 
     public NetServer(int port, Listener listener) {
@@ -57,8 +55,6 @@ public final class NetServer implements AutoCloseable {
         int attempts = requestedPort == 0 ? 12 : 1;
         IOException lastError = null;
 
-        // UDP первым: Windows отдаёт разные диапазоны под TCP и UDP, и порт,
-        // выбранный TCP, может быть запрещён для UDP (excludedportrange)
         for (int attempt = 0; attempt < attempts; attempt++) {
             ServerSocket tcp = null;
             DatagramSocket udp = null;
@@ -76,7 +72,7 @@ public final class NetServer implements AutoCloseable {
                         port = tcp.getLocalPort();
                     } catch (IOException e) {
                         if (udp == null || requestedPort == 0) throw e;
-                        System.err.println("[netcore] TCP недоступен, работаем только на UDP: " + e.getMessage());
+                        System.err.println("[netcore] TCP unavailable, UDP only: " + e.getMessage());
                         tcp = null;
                     }
                 }
@@ -95,8 +91,9 @@ public final class NetServer implements AutoCloseable {
                 if (attempt == attempts - 1) throw e;
                 port = randomPort();
             }
-        }        if (serverSocket == null && udpSocket == null) {
-            throw lastError == null ? new IOException("не удалось занять порт") : lastError;
+        }
+        if (serverSocket == null && udpSocket == null) {
+            throw lastError == null ? new IOException("port unavailable") : lastError;
         }
 
         running = true;
@@ -110,10 +107,29 @@ public final class NetServer implements AutoCloseable {
             udpThread.setDaemon(true);
             udpThread.start();
         }
+        pingThread = new Thread(this::pingLoop, "netcore-server-ping");
+        pingThread.setDaemon(true);
+        pingThread.start();
     }
-    // ------------------------------------------------------------------
-    // TCP
-    // ------------------------------------------------------------------
+
+    private void pingLoop() {
+        byte[] payload = new byte[8];
+        while (running) {
+            long now = System.nanoTime();
+            ByteBuffer.wrap(payload).putLong(now);
+            for (Connection c : connections) {
+                if (c.isOpen()) {
+                    c.onPingSent(now);
+                    c.sendPacket(Packet.PING, payload);
+                }
+            }
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                return;
+            }
+        }
+    }
 
     private void acceptLoop() {
         while (running) {
@@ -133,8 +149,8 @@ public final class NetServer implements AutoCloseable {
                         Connection c = holder[0];
                         if (c != null && connections.remove(c)) listener.onDisconnect(c, reason);
                     }
-                });
-                Connection connection = new Connection(ids.incrementAndGet(), transport);
+                }, config.compression());
+                Connection connection = new Connection(ids.incrementAndGet(), transport, config);
                 holder[0] = connection;
                 connections.add(connection);
                 transport.startReader();
@@ -146,10 +162,6 @@ public final class NetServer implements AutoCloseable {
         }
     }
 
-    // ------------------------------------------------------------------
-    // UDP
-    // ------------------------------------------------------------------
-
     private void udpLoop() {
         byte[] buffer = new byte[65535];
         while (running) {
@@ -160,25 +172,51 @@ public final class NetServer implements AutoCloseable {
                 break;
             }
             SocketAddress from = datagram.getSocketAddress();
-            boolean connect = datagram.getLength() >= 1 && buffer[0] == UdpPeer.T_CONNECT;
-            UdpPeer peer = udpPeers.get(from);
-            if (peer != null) {
-                if (connect) {
-                    // повторный CONNECT: ACCEPT потерялся — отвечаем ещё раз
-                    UdpPeer.sendAccept(udpSocket, from);
-                } else {
-                    peer.onDatagram(buffer, datagram.getLength());
-                }
+            if (datagram.getLength() >= 1 && buffer[0] == UdpPeer.T_CONNECT) {
+                acceptUdp(from);
                 continue;
             }
-            if (connect) acceptUdp(from);
+            UdpPeer peer = udpPeers.get(from);
+            if (peer != null) peer.onDatagram(buffer, datagram.getLength());
         }
     }
 
     private void acceptUdp(SocketAddress from) {
+        UdpPeer oldPeer = udpPeers.remove(from);
+        Connection existing = udpConnections.get(from);
+
+        if (existing != null && connections.contains(existing)) {
+            UdpPeer peer = new UdpPeer(udpSocket, from, config, null);
+            final Connection connection = existing;
+            peer.setListener(new Transport.Listener() {
+                @Override
+                public void onPacket(Packet packet) {
+                    handlePacket(connection, packet);
+                }
+
+                @Override
+                public void onClosed(String reason) {
+                    if (connection.transport() != peer) return;
+                    udpPeers.remove(from, peer);
+                    if (udpConnections.remove(from, connection) && connections.remove(connection)) {
+                        listener.onDisconnect(connection, reason);
+                    }
+                }
+            });
+            connection.replaceTransport(peer);
+            if (oldPeer != null) oldPeer.detachAndClose();
+            udpPeers.put(from, peer);
+            peer.start();
+            UdpPeer.sendAccept(udpSocket, from);
+            return;
+        }
+
+        if (existing != null) udpConnections.remove(from, existing);
+        if (oldPeer != null) oldPeer.detachAndClose();
+
         final Connection[] holder = new Connection[1];
         UdpPeer peer = new UdpPeer(udpSocket, from, config, null);
-        Connection connection = new Connection(ids.incrementAndGet(), peer);
+        Connection connection = new Connection(ids.incrementAndGet(), peer, config);
         holder[0] = connection;
         peer.setListener(new Transport.Listener() {
             @Override
@@ -189,21 +227,24 @@ public final class NetServer implements AutoCloseable {
             @Override
             public void onClosed(String reason) {
                 Connection c = holder[0];
-                udpPeers.remove(from);
-                if (c != null && connections.remove(c)) listener.onDisconnect(c, reason);
+                if (c == null || c.transport() != peer) return;
+                udpPeers.remove(from, peer);
+                if (udpConnections.remove(from, c) && connections.remove(c)) {
+                    listener.onDisconnect(c, reason);
+                }
             }
         });
         udpPeers.put(from, peer);
+        udpConnections.put(from, connection);
         connections.add(connection);
         peer.start();
         UdpPeer.sendAccept(udpSocket, from);
         listener.onConnect(connection);
     }
 
-    // ------------------------------------------------------------------
-
     private void handlePacket(Connection connection, Packet packet) {
         if (connection == null) return;
+        if (!connection.allowIncoming(packet.payload.length)) return;
         if (packet.type == Packet.PING) {
             long clientNanos = packet.payload.length >= 8
                     ? ByteBuffer.wrap(packet.payload).getLong() : 0L;
@@ -215,10 +256,13 @@ public final class NetServer implements AutoCloseable {
         }
         if (packet.type == Packet.DATA) {
             listener.onMessage(connection, packet.payload);
+            return;
+        }
+        if (packet.type == Packet.PONG && packet.payload.length >= 8) {
+            connection.onPong(ByteBuffer.wrap(packet.payload).getLong());
         }
     }
 
-    /** Свободный порт вне системных диапазонов (там Windows отдаёт exclusion-списки). */
     private static int randomPort() {
         return 24000 + java.util.concurrent.ThreadLocalRandom.current().nextInt(20000);
     }
@@ -263,6 +307,7 @@ public final class NetServer implements AutoCloseable {
 
     public synchronized void stop() {
         running = false;
+        if (pingThread != null) pingThread.interrupt();
         try {
             if (serverSocket != null) serverSocket.close();
         } catch (IOException ignored) {
@@ -271,6 +316,7 @@ public final class NetServer implements AutoCloseable {
         for (Connection c : connections) c.close();
         connections.clear();
         udpPeers.clear();
+        udpConnections.clear();
     }
 
     @Override

@@ -14,7 +14,6 @@ import javax.swing.SwingUtilities;
 import java.io.IOException;
 import java.util.List;
 
-/** Состояние приложения: соединение, сервер, навигация между экранами. */
 public final class App {
 
     private final Prefs prefs;
@@ -31,6 +30,8 @@ public final class App {
     private String gameAddress = "";
     private boolean hostGame;
 
+    private final String sessionToken = java.util.UUID.randomUUID().toString();
+
     private HomeScreen home;
     private HostScreen hostScreen;
     private JoinScreen joinScreen;
@@ -43,9 +44,15 @@ public final class App {
     private long toastUntil;
     private boolean toastError;
 
+    private volatile boolean linkLost;
+    private volatile long linkLostNanos;
+    private volatile long linkWindowMs = 30_000;
+    private volatile long linkRestoredNanos;
+    private volatile boolean linkRestoredVisible;
+
     public App(Prefs prefs) {
         this.prefs = prefs;
-        this.myName = prefs.get("name", "Игрок");
+        this.myName = prefs.get("name", "Player");
         this.myColor = prefs.getInt("color", 0);
         Sfx.setEnabled(prefs.getBool("sound", true));
     }
@@ -56,24 +63,21 @@ public final class App {
         window.show(homeScreen());
     }
 
-    /** Создать окно, но не показывать — нужно для офскрин-рендера скриншотов. */
     public void prepareOffscreenWindow() {
         if (window == null) window = new MainWindow(this);
     }
 
-    /** Только для превью: включить вид «хост». */
     public void setPreviewHost(boolean host) {
         this.hostGame = host;
     }
 
-    /** Только для превью: подставить свой id. */
     public void setPreviewId(int id) {
         this.myId = id;
     }
 
-    // ------------------------------------------------------------------
-    // доступ к экранам
-    // ------------------------------------------------------------------
+    public void setPreviewAddress(String address) {
+        this.gameAddress = address == null ? "" : address;
+    }
 
     public MainWindow window() {
         return window;
@@ -112,10 +116,6 @@ public final class App {
         return game;
     }
 
-    // ------------------------------------------------------------------
-    // соединение
-    // ------------------------------------------------------------------
-
     public GameClient client() {
         return client;
     }
@@ -151,7 +151,6 @@ public final class App {
         prefs.set("color", myColor);
     }
 
-    /** Создать сервер и сразу подключиться к нему самому. */
     public void hostGame(int port, GameConfig cfg, String name, int color) throws IOException {
         closeConnections();
         setNameAndColor(name, color);
@@ -169,10 +168,9 @@ public final class App {
             throw e;
         }
         window.show(lobbyScreen());
-        toast("Сервер запущен на порту " + s.port());
+        toast("Server started on port " + s.port());
     }
 
-    /** Подключиться к чужой игре. */
     public void joinGame(String host, int port, String name, int color) throws IOException {
         closeConnections();
         setNameAndColor(name, color);
@@ -202,6 +200,34 @@ public final class App {
                     onConnectionLost(reason);
                 }
             }
+
+            @Override
+            public void onLinkLost(String reason, long retryForMs) {
+                if (holder[0] != null && holder[0] == client) {
+                    linkLost = true;
+                    linkLostNanos = System.nanoTime();
+                    linkWindowMs = retryForMs;
+                    linkRestoredVisible = false;
+                    log("link lost: " + reason);
+                }
+            }
+
+            @Override
+            public void onLinkRestored() {
+                if (holder[0] != null && holder[0] == client) {
+                    long lostMs = (System.nanoTime() - linkLostNanos) / 1_000_000L;
+                    linkLost = false;
+                    linkRestoredNanos = System.nanoTime();
+                    linkRestoredVisible = lostMs > 750;
+                    log("link restored after " + lostMs + " ms");
+                    if (linkRestoredVisible) toast("Connection restored");
+                    GameClient c = client;
+                    if (c != null) {
+                        c.send(Msg.of(Protocol.HELLO).putStr("name", myName)
+                                .put("color", myColor).putStr("token", sessionToken()));
+                    }
+                }
+            }
         });
         client = holder[0];
         myId = -1;
@@ -215,14 +241,8 @@ public final class App {
                 .putStr("token", sessionToken()));
     }
 
-    /** Стабильный id устройства: сервер по нему выкидывает старую сессию при переподключении. */
     public String sessionToken() {
-        String token = prefs.get("token", "");
-        if (token.isEmpty()) {
-            token = java.util.UUID.randomUUID().toString();
-            prefs.set("token", token);
-        }
-        return token;
+        return sessionToken;
     }
 
     public VoiceChat voice() {
@@ -240,6 +260,8 @@ public final class App {
     }
 
     private void closeConnections() {
+        linkLost = false;
+        linkRestoredVisible = false;
         GameClient c = client;
         client = null;
         if (c != null) {
@@ -263,7 +285,6 @@ public final class App {
         System.exit(0);
     }
 
-    /** Демо без друзей: сервер + три бота, чтобы посмотреть игру сразу. */
     public void startDemo(boolean autoStart) {
         try {
             GameConfig cfg = new GameConfig();
@@ -279,13 +300,9 @@ public final class App {
                 timer.start();
             }
         } catch (IOException e) {
-            toastError("Демо не запустилось: " + e.getMessage());
+            toastError("Demo failed to start: " + e.getMessage());
         }
     }
-
-    // ------------------------------------------------------------------
-    // входящие кадры
-    // ------------------------------------------------------------------
 
     private void handleFrame(List<Msg> frame) {
         boolean start = false;
@@ -325,15 +342,37 @@ public final class App {
 
     private void onConnectionLost(String reason) {
         if (client == null) return;
-        toastError("Связь потеряна: " + (reason == null || reason.isBlank() ? "сервер закрылся" : reason));
+        linkLost = false;
+        linkRestoredVisible = false;
+        toastError("Connection lost: " + (reason == null || reason.isBlank() ? "server closed" : reason));
         SwingUtilities.invokeLater(this::leaveToHome);
     }
 
-    // ------------------------------------------------------------------
-    // всплывающие сообщения
-    // ------------------------------------------------------------------
+    public boolean connectionLost() {
+        return linkLost && client != null;
+    }
 
-    /** Пишем строку в журнал стенда. */
+    public float connectionDim() {
+        if (!linkLost || client == null) return 0f;
+        long ms = (System.nanoTime() - linkLostNanos) / 1_000_000L;
+        if (ms < 500) return 0f;
+        float alpha = (float) Math.min(1.0, (ms - 500) / 350.0);
+        return alpha * 0.72f;
+    }
+
+    public long connectionMillisLeft() {
+        if (!linkLost) return 0;
+        long elapsed = (System.nanoTime() - linkLostNanos) / 1_000_000L;
+        return Math.max(0, linkWindowMs - elapsed);
+    }
+
+    public float connectionRestoredAlpha() {
+        if (!linkRestoredVisible) return 0f;
+        long ms = (System.nanoTime() - linkRestoredNanos) / 1_000_000L;
+        if (ms < 0 || ms > 1400) return 0f;
+        return 1f - ms / 1400f;
+    }
+
     public void log(String text) {
         String t = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         log.add(t + "  " + text);

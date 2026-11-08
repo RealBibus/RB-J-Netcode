@@ -9,13 +9,13 @@ import java.awt.Paint;
 import java.awt.Shape;
 import java.awt.geom.Rectangle2D;
 
-/** Рисование в стиле стенда: прямоугольники, тонкие линии, подписи моно. */
+
 public final class Brush {
 
     private Brush() {
     }
 
-    /** Скругление оставлено только для совместимости — стенд рисует прямыми углами. */
+    
     public static Shape round(double x, double y, double w, double h, double r) {
         double rr = Math.min(r, 3);
         return new Rectangle2D.Double(x, y, w, h);
@@ -32,7 +32,7 @@ public final class Brush {
         g.draw(s);
     }
 
-    /** Панель: плоская заливка и рамка в один пиксель. */
+    
     public static void panel(Graphics2D g, double x, double y, double w, double h, double r) {
         g.setColor(Theme.PANEL);
         g.fill(new Rectangle2D.Double(x, y, w, h));
@@ -41,7 +41,7 @@ public final class Brush {
         g.draw(new Rectangle2D.Double(x + 0.5, y + 0.5, w - 1, h - 1));
     }
 
-    /** Панель с заголовком-полоской. */
+    
     public static void panelTitled(Graphics2D g, double x, double y, double w, double h, String title) {
         panel(g, x, y, w, h, 0);
         g.setColor(Theme.PANEL_2);
@@ -53,7 +53,7 @@ public final class Brush {
     }
 
     public static void glow(Graphics2D g, Shape s, Color c, int layers, double spread) {
-        // заглушка: свечение в этом стиле не используется
+        
     }
 
     public static void text(Graphics2D g, String s, double x, double baseline, Font f, Color c) {
@@ -94,7 +94,7 @@ public final class Brush {
         g.drawLine((int) x1, (int) y1, (int) x2, (int) y2);
     }
 
-    /** Сегмент шкалы: заполненная часть и остаток. */
+    
     public static void bar(Graphics2D g, double x, double y, double w, double h, double value, Color color) {
         g.setColor(Theme.PANEL_2);
         g.fill(new Rectangle2D.Double(x, y, w, h));

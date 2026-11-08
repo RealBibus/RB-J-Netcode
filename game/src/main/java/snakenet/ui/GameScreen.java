@@ -33,18 +33,34 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-/** Игровое поле: доска, змейки, эффекты, счёт, отсчёт и результаты. */
+
 public final class GameScreen extends Screen {
 
-    private static final double AREA_X = 56;
-    private static final double AREA_Y = 112;
-    private static final double AREA_W = 916;
-    private static final double AREA_H = 620;
+    
+    
+    private static final double AREA_X = 4;
+    private static final double AREA_Y = 44;
+    private static final double AREA_W = 1272;
+    private static final double AREA_H = 708;
+
+    private static final int TAB_TABLE = 0;
+    private static final int TAB_NET = 1;
+    private static final int TAB_CONSOLE = 2;
+    private static final int TAB_CHAT = 3;
+
+    private static final double PANEL_X = 250;
+    private static final double PANEL_Y = 92;
+    private static final double PANEL_W = 780;
+    private static final double PANEL_H = 620;
+    private static final double PANEL_INNER_X = PANEL_X + 24;
+    private static final double PANEL_INNER_Y = PANEL_Y + 62;
+    private static final double PANEL_INNER_W = PANEL_W - 48;
 
     private static final class PlayerInfo {
         String name = "";
         int color;
         boolean bot;
+        int ping = -1;
     }
 
     private static final class Result {
@@ -79,12 +95,26 @@ public final class GameScreen extends Screen {
     private final Map<Integer, PlayerInfo> names = new HashMap<>();
     private final java.util.List<String[]> chatLines = new java.util.ArrayList<>();
     private final Map<Integer, Integer> sentTicks = new HashMap<>();
-    private final Graph gRtt = new Graph("RTT", "мс", 110);
-    private final Graph gRecon = new Graph("РЕКОНСАЙЛ", "", 110);
+    private final Graph gRtt = new Graph("RTT", "ms", 120);
+    private final Graph gJitter = new Graph("JITTER", "ms", 120);
+    private final Graph gTrafficIn = new Graph("TRAFFIC IN", "KB/s", 120);
+    private final Graph gTrafficOut = new Graph("TRAFFIC OUT", "KB/s", 120);
+    private final Graph gSnapRate = new Graph("SNAPSHOTS", "/s", 120);
+    private final Graph gRecon = new Graph("CORRECTIONS", "/s", 120);
     private InputField chatField;
     private boolean chatOpen;
+    private boolean panelOpen;
+    private int tab = TAB_TABLE;
+    private int lastTab = TAB_TABLE;
     private double telemetryTimer;
     private double chatScroll;
+    private int snapCount;
+    private int rttPrev = -1;
+    private double jitter;
+    private long telemetryBytesIn;
+    private long telemetryBytesOut;
+    private int telemetrySnapCount;
+    private int telemetryReconTotal;
     private final java.util.ArrayDeque<Snapshot> snapHistory = new java.util.ArrayDeque<>();
     private final List<Particle> particles = new ArrayList<>();
     private final List<FloatText> floats = new ArrayList<>();
@@ -106,7 +136,7 @@ public final class GameScreen extends Screen {
     private Snapshot prev;
     private Snapshot cur;
 
-    // предсказание своего игрока (движок netcore)
+    
     private final ServerClock serverClock = new ServerClock();
     private Predictor<SnakePredictState> predictor;
     private SnakePredictState predicted;
@@ -117,7 +147,7 @@ public final class GameScreen extends Screen {
     private volatile int renderTick;
     private volatile double renderSub;
 
-    // сглаживание своей змейки: резкие правки доводим за ~90 мс, а не телепортом
+    
     private double[] localRender;
     private double[] localDelta;
     private double localBlend = 1;
@@ -125,13 +155,12 @@ public final class GameScreen extends Screen {
     private double snapshotIntervalMs = 50;
     private long lastSnapRecv;
 
-    // часы воспроизведения чужих змеек
+    
     private long renderServerNanos;
     private boolean renderClockInit;
     private double interpDelayMs = 66;
     private double snapshotGapMs = 33;
     private long lastSnapSt;
-    private int lastReconTotal;
     private double lastReconPeak = 4;
 
     private double cell = 28;
@@ -144,18 +173,31 @@ public final class GameScreen extends Screen {
     private final NeonButton bLobby;
     private final NeonButton bResume;
     private final NeonButton bQuit;
+    private final NeonButton bTabTable;
+    private final NeonButton bTabNet;
+    private final NeonButton bTabConsole;
+    private final NeonButton bTabChat;
 
     public GameScreen(App app) {
         super(app);
 
-        bAgain = add(new NeonButton("ЕЩЁ РАЗ", NeonButton.Style.PRIMARY, 372, 556, 240, 54, () -> app.send(Msg.of(Protocol.AGAIN))));
-        bLobby = add(new NeonButton("В МЕНЮ", NeonButton.Style.SECONDARY, 636, 556, 200, 54, app::leaveToHome));
-        bResume = add(new NeonButton("Продолжить", NeonButton.Style.PRIMARY, 500, 392, 280, 52, () -> pauseMenu = false));
-        bQuit = add(new NeonButton("Выйти в меню", NeonButton.Style.DANGER, 500, 456, 280, 52, app::leaveToHome));
+        bAgain = add(new NeonButton("PLAY AGAIN", NeonButton.Style.PRIMARY, 372, 556, 240, 54, () -> app.send(Msg.of(Protocol.AGAIN))));
+        bLobby = add(new NeonButton("HOME", NeonButton.Style.SECONDARY, 636, 556, 200, 54, app::leaveToHome));
+        bResume = add(new NeonButton("Resume", NeonButton.Style.PRIMARY, 500, 392, 280, 52, () -> pauseMenu = false));
+        bQuit = add(new NeonButton("Quit to menu", NeonButton.Style.DANGER, 500, 456, 280, 52, app::leaveToHome));
         bAgain.visible = false;
         bLobby.visible = false;
         bResume.visible = false;
         bQuit.visible = false;
+
+        bTabTable = add(new NeonButton("TABLE", NeonButton.Style.CHIP, 424, 758, 112, 30,
+                () -> toggleTab(TAB_TABLE)));
+        bTabNet = add(new NeonButton("NET", NeonButton.Style.CHIP, 544, 758, 84, 30,
+                () -> toggleTab(TAB_NET)));
+        bTabConsole = add(new NeonButton("CONSOLE", NeonButton.Style.CHIP, 636, 758, 112, 30,
+                () -> toggleTab(TAB_CONSOLE)));
+        bTabChat = add(new NeonButton("CHAT", NeonButton.Style.CHIP, 756, 758, 100, 30,
+                () -> toggleTab(TAB_CHAT)));
 
         bind("UP", 0);
         bind("W", 0);
@@ -166,30 +208,36 @@ public final class GameScreen extends Screen {
         bind("LEFT", 3);
         bind("A", 3);
 
-        chatField = new InputField("сообщение…");
+        chatField = new InputField("message…");
         chatField.setVisible(false);
-        addField(chatField, 380, 700, 520, 36, 12);
+        addField(chatField, (int) PANEL_INNER_X, (int) (PANEL_Y + PANEL_H - 58),
+                (int) PANEL_INNER_W, 40, 14);
         chatField.addActionListener(e -> sendChat());
 
+        setFocusTraversalKeysEnabled(false);
         getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("ENTER"), "chatopen");
         getActionMap().put("chatopen", new AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                if (phase != Protocol.PHASE_RUNNING) return;
-                chatOpen = true;
-                chatField.setVisible(true);
-                chatField.requestFocusInWindow();
+                if (pauseMenu || phase == Protocol.PHASE_OVER) return;
+                openChat();
             }
         });
-        getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("ESCAPE"), "chatclose");
-        getActionMap().put("chatclose", new AbstractAction() {
+        getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("TAB"), "paneltoggle");
+        getActionMap().put("paneltoggle", new AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                if (chatOpen) {
-                    chatOpen = false;
-                    chatField.setVisible(false);
-                    chatField.setText("");
-                    requestFocusInWindow();
+                if (pauseMenu) return;
+                if (panelOpen) closePanel();
+                else openTab(lastTab);
+            }
+        });
+        getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("ESCAPE"), "escape");
+        getActionMap().put("escape", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (panelOpen || chatOpen) {
+                    closePanel();
                 } else {
                     pauseMenu = !pauseMenu;
                 }
@@ -210,14 +258,42 @@ public final class GameScreen extends Screen {
                 if (app.voice() != null) app.voice().setTalking(false);
             }
         });
-        getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-                .put(KeyStroke.getKeyStroke("ESCAPE"), "pause");
-        getActionMap().put("pause", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                pauseMenu = !pauseMenu;
-            }
-        });
+    }
+
+    private void toggleTab(int which) {
+        if (pauseMenu) return;
+        if (panelOpen && tab == which) {
+            closePanel();
+        } else {
+            openTab(which);
+        }
+    }
+
+    private void openTab(int which) {
+        panelOpen = true;
+        lastTab = which;
+        tab = which;
+        if (which == TAB_CHAT) {
+            chatOpen = true;
+            chatField.setVisible(true);
+            chatField.requestFocusInWindow();
+        } else {
+            chatOpen = false;
+            chatField.setVisible(false);
+            requestFocusInWindow();
+        }
+    }
+
+    private void openChat() {
+        openTab(TAB_CHAT);
+    }
+
+    private void closePanel() {
+        panelOpen = false;
+        chatOpen = false;
+        chatField.setVisible(false);
+        chatField.setText("");
+        requestFocusInWindow();
     }
 
     private void bind(String key, int dir) {
@@ -236,16 +312,18 @@ public final class GameScreen extends Screen {
     public void onShow() {
         requestFocusInWindow();
         pauseMenu = false;
+        closePanel();
     }
 
     @Override
     public void onHide() {
         pauseMenu = false;
+        closePanel();
     }
 
-    // ------------------------------------------------------------------
-    // сеть
-    // ------------------------------------------------------------------
+    
+    
+    
 
     @Override
     public void onFrame(List<Msg> frame) {
@@ -269,6 +347,8 @@ public final class GameScreen extends Screen {
                     results = new ArrayList<>();
                     phase = Protocol.PHASE_OVER;
                     countdown = 0;
+                    closePanel();
+                    app.log("round over");
                     break;
                 case Protocol.RESULT:
                     addResult(m);
@@ -287,14 +367,16 @@ public final class GameScreen extends Screen {
                     boolean system = m.num("kind", 0) == 1;
                     chatLines.add(new String[]{m.str("from"), text, system ? "1" : "0", String.valueOf(m.num("c", 0))});
                     if (chatLines.size() > 80) chatLines.remove(0);
+                    app.log(system ? text : m.str("from") + ": " + text);
                     if (system) {
                         String lower = text.toLowerCase(java.util.Locale.ROOT);
-                        if (lower.contains("подключ") || lower.contains("выкинут")) Sfx.play(Sfx.Sound.JOIN);
+                        if (lower.contains("joined") || lower.contains("reconnected")) Sfx.play(Sfx.Sound.JOIN);
                     }
                     break;
                 }
                 case Protocol.KICK:
                     app.toastError(m.str("msg"));
+                    app.log("KICK: " + m.str("msg"));
                     break;
                 default:
                     break;
@@ -305,13 +387,18 @@ public final class GameScreen extends Screen {
             bAgain.visible = true;
             bLobby.visible = true;
             bAgain.enabled = host;
-            bAgain.label = host ? "ЕЩЁ РАЗ" : "ЖДЁМ ХОСТА";
+            bAgain.label = host ? "PLAY AGAIN" : "WAITING FOR HOST";
         } else {
             bAgain.visible = false;
             bLobby.visible = false;
         }
         bResume.visible = pauseMenu;
         bQuit.visible = pauseMenu;
+        boolean tabs = phase != Protocol.PHASE_OVER && !pauseMenu;
+        bTabTable.visible = tabs;
+        bTabNet.visible = tabs;
+        bTabConsole.visible = tabs;
+        bTabChat.visible = tabs;
     }
 
     private void readRoster(List<Msg> frame) {
@@ -322,6 +409,7 @@ public final class GameScreen extends Screen {
             info.name = m.str("name");
             info.color = m.num("c", 0);
             info.bot = m.bool("bot");
+            info.ping = m.num("pg", -1);
             map.put(m.num("id", -1), info);
         }
         if (!map.isEmpty()) {
@@ -367,13 +455,23 @@ public final class GameScreen extends Screen {
         bLobby.visible = false;
         bResume.visible = false;
         bQuit.visible = false;
+        closePanel();
+        snapCount = 0;
+        telemetrySnapCount = 0;
+        telemetryReconTotal = 0;
+        telemetryBytesIn = 0;
+        telemetryBytesOut = 0;
+        rttPrev = -1;
+        jitter = 0;
+        app.log("round started: " + cols + "×" + rows + ", " + cfg.cellsPerSec + " cells/s, "
+                + cfg.tickRate + " Hz" + (cfg.subtick ? ", subtick ×" + cfg.subSteps : ""));
         Sfx.play(Sfx.Sound.START);
     }
 
     private void applySnapshot(List<Msg> frame) {
         Snapshot snap = Snapshot.parse(frame, System.nanoTime());
         if (snap == null) return;
-        // UDP может переставить пакеты — старый снимок не должен откатывать состояние
+        
         if (cur != null && (snap.tick <= cur.tick
                 || (snap.serverNanos > 0 && snap.serverNanos <= cur.serverNanos))) return;
         boolean first = cur == null;
@@ -391,6 +489,7 @@ public final class GameScreen extends Screen {
         lastSnapSt = snap.serverNanos;
         prev = cur;
         cur = snap;
+        snapCount++;
         snapHistory.addLast(snap);
         while (snapHistory.size() > 12) snapHistory.removeFirst();
         serverClock.onSnapshot(snap.tick, snap.serverNanos, snap.tickRate, snap.recvNanos);
@@ -405,7 +504,7 @@ public final class GameScreen extends Screen {
         for (Snapshot.EventView e : snap.events) handleEvent(e);
     }
 
-    /** Сверка предсказания с сервером: мелкие расхождения — плавно, большие — «тпха». */
+    
     private void reconcile(Snapshot snap) {
         if (predictor == null) return;
         Snapshot.SnakeView mine = snap.snake(app.myId());
@@ -428,7 +527,7 @@ public final class GameScreen extends Screen {
         predicted = predictor.predicted();
     }
 
-    /** Локальное нажатие: сразу в предсказание и на сервер. */
+    
     private void handleInput(int dir) {
         if (chatOpen || predictor == null || app.client() == null) return;
         ClockSync clock = app.client().clock();
@@ -503,9 +602,9 @@ public final class GameScreen extends Screen {
         }
     }
 
-    // ------------------------------------------------------------------
-    // анимация
-    // ------------------------------------------------------------------
+    
+    
+    
 
     @Override
     protected void onTick(double dt) {
@@ -540,7 +639,7 @@ public final class GameScreen extends Screen {
             f.y -= dt * 1.2;
         }
 
-        // часы воспроизведения чужих: идём по локальному времени и мягко подтягиваемся
+        
         if (cur != null) {
             long nowNanos = serverNanosNow();
             long target = nowNanos - (long) (interpDelayMs * 1_000_000.0);
@@ -562,13 +661,44 @@ public final class GameScreen extends Screen {
 
         telemetryTimer += dt;
         if (telemetryTimer >= 0.25) {
+            double span = telemetryTimer;
             telemetryTimer = 0;
-            gRtt.push(app.client() == null ? 0 : Math.max(0, app.client().rttMs()));
+            int rtt = app.client() == null ? -1 : Math.max(0, app.client().rttMs());
+            gRtt.push(rtt);
+            if (rttPrev >= 0 && rtt >= 0) jitter = jitter * 0.7 + Math.abs(rtt - rttPrev) * 0.3;
+            rttPrev = rtt;
+            gJitter.push(jitter);
+
             int total = corrections + snaps;
-            gRecon.push(Math.max(0, total - lastReconTotal));
-            lastReconTotal = total;
-            lastReconPeak = Math.max(lastReconPeak * 0.98, Math.max(1, total - lastReconTotal + 1));
+            int reconDelta = Math.max(0, total - telemetryReconTotal);
+            int snapDelta = Math.max(0, snapCount - telemetrySnapCount);
+            telemetryReconTotal = total;
+            telemetrySnapCount = snapCount;
+            gRecon.push(reconDelta / span);
+            gSnapRate.push(snapDelta / span);
+            lastReconPeak = Math.max(reconDelta, lastReconPeak * 0.9);
+
+            if (app.client() != null) {
+                long in = app.client().stats().bytesIn();
+                long out = app.client().stats().bytesOut();
+                if (telemetryBytesIn > 0) {
+                    gTrafficIn.push((in - telemetryBytesIn) / 1024.0 / span);
+                    gTrafficOut.push((out - telemetryBytesOut) / 1024.0 / span);
+                }
+                telemetryBytesIn = in;
+                telemetryBytesOut = out;
+            }
         }
+
+        boolean tabs = phase != Protocol.PHASE_OVER && !pauseMenu;
+        bTabTable.visible = tabs;
+        bTabNet.visible = tabs;
+        bTabConsole.visible = tabs;
+        bTabChat.visible = tabs;
+        bTabTable.selected = panelOpen && tab == TAB_TABLE;
+        bTabNet.selected = panelOpen && tab == TAB_NET;
+        bTabConsole.selected = panelOpen && tab == TAB_CONSOLE;
+        bTabChat.selected = panelOpen && tab == TAB_CHAT;
 
         if (predictor != null && predictor.ready() && app.client() != null
                 && phase == Protocol.PHASE_RUNNING) {
@@ -583,17 +713,18 @@ public final class GameScreen extends Screen {
     }
 
     private void computeBoard() {
-        cell = Math.floor(Math.min(AREA_W / cols, AREA_H / rows));
-        cell = Math.max(4, cell);
+        
+        
+        cell = Math.max(4, Math.min(AREA_W / cols, AREA_H / rows));
         boardW = cell * cols;
         boardH = cell * rows;
         boardX = AREA_X + (AREA_W - boardW) / 2.0;
         boardY = AREA_Y + (AREA_H - boardH) / 2.0;
     }
 
-    // ------------------------------------------------------------------
-    // рисование
-    // ------------------------------------------------------------------
+    
+    
+    
 
     @Override
     protected void paintScreen(Graphics2D g) {
@@ -605,67 +736,308 @@ public final class GameScreen extends Screen {
         }
         paintBoard(board);
         board.dispose();
-        paintSidebar(g);
-        paintChat(g);
+        paintChatHud(g);
         paintOverlays(g);
+        if (panelOpen) paintPanel(g);
     }
 
     private void sendChat() {
         String text = chatField.getText().trim();
         if (!text.isEmpty()) app.send(Msg.of(Protocol.CHAT).putStr("text", text));
         chatField.setText("");
-        chatOpen = false;
-        chatField.setVisible(false);
-        requestFocusInWindow();
+        closePanel();
     }
 
-    /** Чат поверх поля: последние сообщения и подсказка. */
-    private void paintChat(Graphics2D g) {
-        if (chatLines.isEmpty() && !chatOpen) return;
-        int from = Math.max(0, chatLines.size() - 7);
-        int count = chatLines.size() - from;
-        double lineH = 18;
-        double top = boardY + boardH - 18 - count * lineH;
-        double width = 420;
+    
+    private void paintChatHud(Graphics2D g) {
+        if (!panelOpen && !pauseMenu && phase != Protocol.PHASE_OVER) {
+            if (!chatLines.isEmpty()) {
+                int from = Math.max(0, chatLines.size() - 3);
+                int count = chatLines.size() - from;
+                double lineH = 17;
+                double bottom = VH - 44;
+                double top = bottom - count * lineH;
+                double width = 470;
+                g.setColor(new Color(0, 0, 0, 145));
+                g.fill(new Rectangle2D.Double(12, top - 10, width + 16, count * lineH + 8));
+                g.setColor(Theme.LINE);
+                g.draw(new Rectangle2D.Double(12.5, top - 9.5, width + 15, count * lineH + 7));
+                double y = top + 5;
+                for (int i = from; i < chatLines.size(); i++) {
+                    String[] line = chatLines.get(i);
+                    boolean system = "1".equals(line[2]);
+                    String text = system ? line[1] : line[0] + ": " + line[1];
+                    Color color = system ? Theme.MUTED : Theme.player(Integer.parseInt(line[3]));
+                    Brush.text(g, Brush.ellipsize(g, text, width), 20, y, Theme.font(11), color);
+                    y += lineH;
+                }
+            }
+            Brush.text(g, "ENTER — CHAT    TAB — PANEL    K — VOICE", 16, VH - 10,
+                    Theme.font(9), Theme.MUTED);
+        }
+    }
 
+    
+    
+    
+
+    private void paintPanel(Graphics2D g) {
         g.setColor(new Color(0, 0, 0, 150));
-        g.fill(new Rectangle2D.Double(boardX + 8, top - 16, width + 16, count * lineH + 12));
-        g.setColor(Theme.LINE);
-        g.draw(new Rectangle2D.Double(boardX + 8.5, top - 15.5, width + 15, count * lineH + 11));
+        g.fillRect(0, 0, VW, VH);
 
-        double y = top;
+        Brush.panel(g, PANEL_X, PANEL_Y, PANEL_W, PANEL_H, 0);
+        g.setColor(Theme.PANEL_2);
+        g.fill(new Rectangle2D.Double(PANEL_X, PANEL_Y, PANEL_W, 40));
+        g.setColor(Theme.ACCENT);
+        g.fill(new Rectangle2D.Double(PANEL_X, PANEL_Y + 39, PANEL_W, 1));
+        g.setColor(Theme.LINE);
+        g.draw(new Rectangle2D.Double(PANEL_X + 0.5, PANEL_Y + 0.5, PANEL_W - 1, PANEL_H - 1));
+
+        String title;
+        switch (tab) {
+            case TAB_NET: title = "NETWORK · GRAPHS"; break;
+            case TAB_CONSOLE: title = "CONSOLE · LOG"; break;
+            case TAB_CHAT: title = "CHAT"; break;
+            default: title = "TABLE · PLAYERS AND PING"; break;
+        }
+        Brush.text(g, title, PANEL_INNER_X, PANEL_Y + 26, Theme.semibold(13), Theme.TEXT);
+        Brush.right(g, "ESC — CLOSE", PANEL_X + PANEL_W - 24, PANEL_Y + 26, Theme.font(10), Theme.MUTED);
+
+        switch (tab) {
+            case TAB_NET: paintNetTab(g); break;
+            case TAB_CONSOLE: paintConsoleTab(g); break;
+            case TAB_CHAT: paintChatTab(g); break;
+            default: paintTableTab(g); break;
+        }
+    }
+
+    private static final class Row {
+        int id;
+        String name;
+        int color;
+        int score;
+        int ping;
+        Boolean alive;
+    }
+
+    private List<Row> tableRows() {
+        List<Row> rows = new ArrayList<>();
+        if (cur != null && !cur.snakes.isEmpty()) {
+            for (Snapshot.SnakeView s : cur.snakes) {
+                Row r = new Row();
+                r.id = s.id;
+                PlayerInfo info = names.get(s.id);
+                r.name = info != null ? info.name : ("Player " + s.id);
+                r.color = s.color;
+                r.score = s.score;
+                r.ping = s.ping;
+                r.alive = s.alive;
+                rows.add(r);
+            }
+        } else {
+            for (Map.Entry<Integer, PlayerInfo> e : names.entrySet()) {
+                Row r = new Row();
+                r.id = e.getKey();
+                r.name = e.getValue().name;
+                r.color = e.getValue().color;
+                r.score = 0;
+                r.ping = e.getValue().ping;
+                r.alive = null;
+                rows.add(r);
+            }
+        }
+        rows.sort((a, b) -> Integer.compare(b.score, a.score));
+        for (Row r : rows) {
+            if (r.id == app.myId() && app.client() != null) {
+                int mine = app.client().rttMs();
+                if (mine >= 0) r.ping = mine;
+            }
+        }
+        return rows;
+    }
+
+    private void paintTableTab(Graphics2D g) {
+        double x = PANEL_INNER_X;
+        double y = PANEL_INNER_Y;
+        double w = PANEL_INNER_W;
+
+        Brush.text(g, "PLACE", x + 6, y, Theme.bold(10), Theme.MUTED);
+        Brush.text(g, "PLAYER", x + 78, y, Theme.bold(10), Theme.MUTED);
+        Brush.right(g, "SCORE", x + 470, y, Theme.bold(10), Theme.MUTED);
+        Brush.right(g, "PING", x + 580, y, Theme.bold(10), Theme.MUTED);
+        Brush.right(g, "STATUS", x + w - 8, y, Theme.bold(10), Theme.MUTED);
+        y += 12;
+        g.setColor(Theme.LINE);
+        g.draw(new Line2D.Double(x, y, x + w, y));
+
+        List<Row> rows = tableRows();
+        int place = 1;
+        double rowY = y + 10;
+        for (Row r : rows) {
+            double top = rowY + (place - 1) * 34;
+            if (top > PANEL_Y + PANEL_H - 70) break;
+            if (r.id == app.myId()) {
+                g.setColor(new Color(0xFF, 0xFF, 0xFF, 12));
+                g.fill(new Rectangle2D.Double(x, top, w, 30));
+                g.setColor(Theme.alpha(Theme.ACCENT, 120));
+                g.draw(new Rectangle2D.Double(x + 0.5, top + 0.5, w - 1, 29));
+            }
+            Color c = Theme.player(r.color);
+            String medal = place == 1 ? "1" : place == 2 ? "2" : place == 3 ? "3" : String.valueOf(place);
+            Color medalColor = place == 1 ? Theme.GOLD : place == 2 ? new Color(0xC8, 0xD4, 0xE4)
+                    : place == 3 ? new Color(0xD8, 0x9B, 0x6A) : Theme.MUTED;
+            Brush.centered(g, medal, x + 22, top + 21, Theme.semibold(14), medalColor);
+            g.setColor(c);
+            g.fill(new Ellipse2D.Double(x + 50, top + 10, 11, 11));
+            Brush.text(g, Brush.ellipsize(g, r.name, 260), x + 72, top + 21,
+                    Theme.semibold(14), r.id == app.myId() ? Theme.ACCENT : Theme.TEXT);
+            Brush.right(g, String.valueOf(r.score), x + 470, top + 21, Theme.semibold(14), Theme.ACCENT);
+            String ping = r.ping < 0 ? "—" : r.ping + " ms";
+            Color pingColor = r.ping < 0 ? Theme.MUTED : r.ping < 60 ? Theme.ACCENT
+                    : r.ping < 120 ? Theme.YELLOW : Theme.DANGER;
+            Brush.right(g, ping, x + 580, top + 21, Theme.font(13), pingColor);
+            String status = r.alive == null ? "LOBBY" : r.alive ? "PLAYING" : "OUT";
+            Color statusColor = r.alive == null ? Theme.MUTED : r.alive ? Theme.ACCENT2 : Theme.DANGER;
+            Brush.right(g, status, x + w - 8, top + 21, Theme.font(12), statusColor);
+            place++;
+        }
+        if (rows.isEmpty()) {
+            Brush.text(g, "No one here yet", x + 8, y + 34, Theme.font(14), Theme.MUTED);
+        }
+        Brush.text(g, "Ping is measured by the server · updated twice per second",
+                x + 8, PANEL_Y + PANEL_H - 22, Theme.font(10), Theme.MUTED);
+    }
+
+    private void paintNetTab(Graphics2D g) {
+        double x = PANEL_INNER_X;
+        double y = PANEL_INNER_Y;
+        double gap = 12;
+        double colW = (PANEL_INNER_W - gap) / 2;
+        double h = 132;
+
+        gRtt.paint(g, x, y, colW, h, Theme.ACCENT2, Math.max(60, gRtt.last() * 1.4));
+        gJitter.paint(g, x + colW + gap, y, colW, h, Theme.YELLOW, Math.max(10, gJitter.last() * 1.5));
+        gTrafficIn.paint(g, x, y + h + gap, colW, h, Theme.ACCENT, Math.max(4, gTrafficIn.last() * 1.4));
+        gTrafficOut.paint(g, x + colW + gap, y + h + gap, colW, h, Theme.MAGENTA,
+                Math.max(4, gTrafficOut.last() * 1.4));
+        gSnapRate.paint(g, x, y + (h + gap) * 2, colW, h, Theme.ACCENT2,
+                Math.max(10, gSnapRate.last() * 1.4));
+        gRecon.paint(g, x + colW + gap, y + (h + gap) * 2, colW, h, Theme.YELLOW,
+                Math.max(4, Math.max(lastReconPeak, gRecon.last()) * 1.4));
+
+        double statsY = y + (h + gap) * 3 + 4;
+        String protocol = app.client() == null ? "—" : app.client().protocol();
+        String stats = "PROTOCOL " + protocol
+                + "   PACKETS " + packetsIn() + "/" + packetsOut()
+                + "   TRAFFIC " + kbTotalIn() + "/" + kbTotalOut() + " KB"
+                + "   RATE " + cfg.tickRate + " Hz";
+        Brush.text(g, stats, x, statsY, Theme.font(11), Theme.DIM);
+        int rtt = app.client() == null ? -1 : app.client().rttMs();
+        int loss = app.client() == null ? 0 : app.client().lossPercent();
+        int quality = app.client() == null ? 0 : app.client().quality();
+        String stats2 = "RTT " + (rtt < 0 ? "—" : rtt + " ms")
+                + "   JITTER " + Math.round(jitter) + " ms"
+                + "   LOSS " + loss + "%"
+                + "   QUALITY " + quality + "%";
+        Brush.text(g, stats2, x, statsY + 18, Theme.font(11), Theme.DIM);
+        String stats3 = "SNAPSHOTS " + snapCount
+                + "   CORRECTIONS " + corrections
+                + "   RESETS " + snaps
+                + "   INTERP " + Math.round(interpDelayMs) + " ms";
+        Brush.text(g, stats3, x, statsY + 36, Theme.font(11), Theme.DIM);
+    }
+
+    private long packetsIn() {
+        return app.client() == null ? 0 : app.client().stats().packetsIn();
+    }
+
+    private long packetsOut() {
+        return app.client() == null ? 0 : app.client().stats().packetsOut();
+    }
+
+    private long kbTotalIn() {
+        return app.client() == null ? 0 : app.client().stats().bytesIn() / 1024;
+    }
+
+    private long kbTotalOut() {
+        return app.client() == null ? 0 : app.client().stats().bytesOut() / 1024;
+    }
+
+    private void paintConsoleTab(Graphics2D g) {
+        List<String> lines = app.logLines();
+        int maxLines = 25;
+        int from = Math.max(0, lines.size() - maxLines);
+        double lineH = 20;
+        double y = PANEL_INNER_Y + 4;
+        for (int i = from; i < lines.size(); i++) {
+            String line = lines.get(i);
+            String lower = line.toLowerCase(java.util.Locale.ROOT);
+            Color c = Theme.DIM;
+            if (lower.contains("error") || lower.contains("kick") || lower.contains("lost")
+                    || lower.contains("loss"))
+                c = Theme.DANGER;
+            else if (lower.contains("round") || lower.contains("joined") || lower.contains("reconnected"))
+                c = Theme.ACCENT2;
+            else if (lower.contains("chat") || line.contains(":")) c = Theme.TEXT;
+            Brush.text(g, Brush.ellipsize(g, line, PANEL_INNER_W - 8), PANEL_INNER_X, y,
+                    Theme.mono(11), c);
+            y += lineH;
+        }
+        if (lines.isEmpty()) {
+            Brush.text(g, "The log is empty", PANEL_INNER_X, PANEL_INNER_Y + 24, Theme.font(13), Theme.MUTED);
+        }
+        Brush.text(g, "NETWORK EVENTS, CHAT AND ERRORS · " + lines.size() + " LINES",
+                PANEL_INNER_X, PANEL_Y + PANEL_H - 22, Theme.font(10), Theme.MUTED);
+    }
+
+    private void paintChatTab(Graphics2D g) {
+        double width = PANEL_INNER_W;
+        double fieldTop = PANEL_Y + PANEL_H - 58;
+        int maxLines = 20;
+        int from = Math.max(0, chatLines.size() - maxLines);
+        double lineH = 19;
+        double y = PANEL_INNER_Y + 6;
         for (int i = from; i < chatLines.size(); i++) {
             String[] line = chatLines.get(i);
             boolean system = "1".equals(line[2]);
             String text = system ? line[1] : line[0] + ": " + line[1];
             Color color = system ? Theme.MUTED : Theme.player(Integer.parseInt(line[3]));
-            g.setFont(Theme.font(11));
-            Brush.text(g, Brush.ellipsize(g, text, width), boardX + 16, y, Theme.font(11), color);
+            Brush.text(g, Brush.ellipsize(g, text, width - 8), PANEL_INNER_X, y,
+                    Theme.font(13), color);
             y += lineH;
         }
-
-        if (chatOpen) {
-            Brush.text(g, "ENTER - отправить, ESC - закрыть", boardX + 380, 690, Theme.font(10), Theme.MUTED);
-        } else {
-            Brush.text(g, "ENTER - чат   K - голос", boardX + 16, boardY + boardH - 16, Theme.font(9), Theme.MUTED);
+        if (chatLines.isEmpty()) {
+            Brush.text(g, "No messages yet. Say hi first.", PANEL_INNER_X, PANEL_INNER_Y + 14,
+                    Theme.font(13), Theme.MUTED);
         }
+        Brush.text(g, "ENTER — send   ESC — close", PANEL_INNER_X, fieldTop - 12,
+                Theme.font(10), Theme.MUTED);
     }
 
     private void paintTopBar(Graphics2D g) {
-        Brush.text(g, "SNAKE NET", 56, 74, Theme.display(17), Theme.TEXT);
-        g.setColor(Theme.ACCENT);
-        g.fill(new Ellipse2D.Double(170, 63, 7, 7));
+        g.setColor(new Color(0x08, 0x0A, 0x0C, 225));
+        g.fill(new Rectangle2D.Double(0, 0, VW, 42));
+        g.setColor(Theme.LINE);
+        g.draw(new Line2D.Double(0, 42.5, VW, 42.5));
 
-        String info = cols + "×" + rows + "  ·  " + cfg.cellsPerSec + " кл/с  ·  " + cfg.tickRate + " тик"
+        Brush.text(g, "SNAKE NET", 16, 27, Theme.display(15), Theme.TEXT);
+        g.setColor(Theme.ACCENT);
+        g.fill(new Ellipse2D.Double(119, 17, 6, 6));
+
+        String info = cols + "×" + rows + "  ·  " + cfg.cellsPerSec + " cells/s  ·  " + cfg.tickRate + " Hz"
                 + (cfg.subtick ? " · subtick ×" + cfg.subSteps : "") + "  ·  "
-                + (cfg.walls ? "стены" : "сквозь стены")
+                + (cfg.walls ? "walls" : "wrap")
                 + (app.client() == null ? "" : "  ·  " + app.client().protocol());
-        Brush.text(g, info, 196, 74, Theme.font(12), Theme.MUTED);
+        Brush.text(g, info, 136, 27, Theme.font(11), Theme.MUTED);
 
         int total = 0;
         if (cur != null) total = cur.snakes.size();
-        String right = "ИГРОКОВ " + total + "   ·   " + timeString(runTime);
-        Brush.right(g, right, 1224, 74, Theme.font(12), Theme.MUTED);
+        int ping = app.client() == null ? -1 : app.client().rttMs();
+        String right = "PLAYERS " + total
+                + "   ·   " + timeString(runTime)
+                + "   ·   FPS " + win.fps()
+                + "   ·   PING " + (ping < 0 ? "—" : ping + " ms");
+        Brush.right(g, right, VW - 16, 27, Theme.font(11), Theme.MUTED);
     }
 
     private String timeString(double seconds) {
@@ -674,16 +1046,14 @@ public final class GameScreen extends Screen {
     }
 
     private void paintBoard(Graphics2D g) {
-        Shape outer = Brush.round(boardX - 14, boardY - 14, boardW + 28, boardH + 28, 14);
-        g.setColor(new Color(0, 0, 0, 110));
-        g.fill(Brush.round(boardX - 10, boardY - 9, boardW + 28, boardH + 28, 14));
+        Shape outer = Brush.round(boardX, boardY, boardW, boardH, 8);
         g.setColor(new Color(0x0A, 0x0D, 0x12));
         g.fill(outer);
-        g.setColor(Theme.LINE);
-        g.setStroke(new BasicStroke(2.6f));
+        g.setColor(Theme.alpha(Theme.LINE, 200));
+        g.setStroke(new BasicStroke(1.6f));
         g.draw(outer);
 
-        // точки на пересечениях клеток вместо линий
+        
         g.setColor(new Color(255, 255, 255, 12));
         for (int x = 1; x < cols; x++) {
             for (int y = 1; y < rows; y++) {
@@ -692,7 +1062,7 @@ public final class GameScreen extends Screen {
         }
 
         if (cur == null) {
-            Brush.centered(g, "Ждём старт…", boardX + boardW / 2, boardY + boardH / 2, Theme.font(18), Theme.MUTED);
+            Brush.centered(g, "Waiting for the start…", boardX + boardW / 2, boardY + boardH / 2, Theme.font(18), Theme.MUTED);
             return;
         }
 
@@ -732,7 +1102,7 @@ public final class GameScreen extends Screen {
             g.setColor(new Color(255, 255, 255, 170));
             double hl = r * 0.55;
             g.fill(new Ellipse2D.Double(cx - r * 0.45, cy - r * 0.55, hl, hl));
-            // хвостик
+            
             g.setColor(Theme.shade(c, 0.25));
             g.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             g.draw(new Line2D.Double(cx + r * 0.25, cy - r * 0.85, cx + r * 0.55, cy - r * 1.25));
@@ -747,12 +1117,12 @@ public final class GameScreen extends Screen {
         return cur.serverNanos + (System.nanoTime() - cur.recvNanos);
     }
 
-    /**
-     * Непрерывные точки змейки. Позиция головы — это клетка плюс доля
-     * накопителя движения; каждый следующий сегмент подтягивается к впереди
-     * идущему ровно на ту же долю. Поэтому движение идёт «на рельсах»,
-     * а поворот происходит вместе с движением, а не до него.
-     */
+    
+
+
+
+
+
     private double[] forecastPoints(int[] xs, int[] ys, int dir, int acc, double unitsAhead) {
         return SnakeRenderMath.points(xs, ys, dir, acc, unitsAhead);
     }
@@ -764,19 +1134,19 @@ public final class GameScreen extends Screen {
         return remotePoints(s.id);
     }
 
-    /**
-     * Чужие змейки: рендерим с задержкой в пару снимков и интерполируем
-     * непрерывные позиции между соседними снимками — так нет ни замираний,
-     * ни прыжков на границе клетки.
-     */
-    /**
-     * Чужие змейки: часы воспроизведения.
-     *
-     * <p>Время рендера идёт по локальным часам и только мягко подтягивается
-     * к «сервер сейчас минус задержка». Раньше оно каждый кадр пересчитывалось
-     * заново от оценки серверных часов — любая дрожь оценки давала рывок
-     * картинки у всех чужих змеек.</p>
-     */
+    
+
+
+
+
+    
+
+
+
+
+
+
+
     private double[] remotePoints(int snakeId) {
         if (snapHistory.isEmpty()) return null;
         Snapshot first = snapHistory.peekFirst();
@@ -796,7 +1166,7 @@ public final class GameScreen extends Screen {
         if (before == null) return viewPoints(first, snakeId);
 
         if (after == null) {
-            // буфер кончился (пакет опоздал) — экстраполируем вперёд, а не замираем
+            
             Snapshot prev = secondLastSnapshot();
             if (prev == null || last.serverNanos <= prev.serverNanos) return viewPoints(last, snakeId);
             double phase = (renderServerNanos - last.serverNanos)
@@ -855,7 +1225,7 @@ public final class GameScreen extends Screen {
                 py[i] = boardY + (pts[i * 2 + 1] + 0.5) * cell;
             }
 
-            // тело: хвост -> голова, каждый сегмент — скруглённый квадратик
+            
             for (int i = n - 1; i >= 0; i--) {
                 double size = cell * (i == 0 ? 1.0 : 0.94);
                 double rr = size * 0.30;
@@ -895,7 +1265,7 @@ public final class GameScreen extends Screen {
                 g.fill(new Ellipse2D.Double(eyeX + perpX - tr - 0.5, eyeY + perpY - tr - 0.5, tr * 2, tr * 2));
                 g.fill(new Ellipse2D.Double(eyeX - perpX - tr - 0.5, eyeY - perpY - tr - 0.5, tr * 2, tr * 2));
 
-                // язык: высовывается рывками
+                
                 if (Math.sin(time * 5 + s.id * 1.7) > 0.55) {
                     double bx = hx + dxs * cell * 0.44;
                     double by = hy + dys * cell * 0.44;
@@ -910,18 +1280,18 @@ public final class GameScreen extends Screen {
                     g.draw(new Line2D.Double(ex, ey, ex + dxs * cell * 0.09 - fx, ey + dys * cell * 0.09 - fy));
                 }
             }
-            // подпись своего ника над головой
+            
             if (s.id == app.myId()) {
-                Brush.text(g, "ты", hx + cell * 0.5, hy - cell * 0.55, Theme.semibold(10), Theme.alpha(Theme.ACCENT, 200));
+                Brush.text(g, "you", hx + cell * 0.5, hy - cell * 0.55, Theme.semibold(10), Theme.alpha(Theme.ACCENT, 200));
             }
         }
     }
 
-    /**
-     * Сглаживание своей змейки. Обычные кадры рисуются как есть, но если
-     * сервер прислал правку и позиция скакнула — доводим её за ~90 мс,
-     * чтобы поворот не выглядел рывком.
-     */
+    
+
+
+
+
     private void updateLocalRender(double dt) {
         double[] target = computePredictedPoints();
         if (target == null) {
@@ -962,7 +1332,7 @@ public final class GameScreen extends Screen {
         for (int i = 0; i < n; i++) max = Math.max(max, Math.abs(a[i] - b[i]));
         return max;
     }
-    /** Своя змейка: смешиваем непрерывные позиции двух соседних предсказанных тиков. */
+    
     private double[] computePredictedPoints() {
         SnakePredictState a = predictor == null ? null : predictor.stateAt(renderTick - 1);
         SnakePredictState b = predictor == null ? null : predictor.stateAt(renderTick);
@@ -993,71 +1363,14 @@ public final class GameScreen extends Screen {
         }
     }
 
-    private void paintSidebar(Graphics2D g) {
-        Brush.panel(g, 1000, 112, 224, 620, 22);
-        Brush.text(g, "СЧЁТ", 1022, 142, Theme.semibold(11), Theme.MUTED);
-
-        List<Snapshot.SnakeView> list = new ArrayList<>();
-        if (cur != null) list.addAll(cur.snakes);
-        list.sort((a, b) -> Integer.compare(b.score, a.score));
-        int max = 10;
-        for (Snapshot.SnakeView s : list) max = Math.max(max, s.score);
-
-        int shown = Math.min(list.size(), 8);
-        for (int i = 0; i < shown; i++) {
-            Snapshot.SnakeView s = list.get(i);
-            PlayerInfo info = names.get(s.id);
-            String name = info != null ? info.name : "Игрок " + s.id;
-            Color c = Theme.player(s.color);
-            double y = 158 + i * 52;
-
-            if (!s.alive) {
-                g.setColor(new Color(255, 255, 255, 8));
-                g.fill(new RoundRectangle2D.Double(1012, y, 200, 44, 12, 12));
-            }
-            g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), s.alive ? 48 : 20));
-            g.fill(new Ellipse2D.Double(1016, y + 9, 26, 26));
-            g.setColor(s.alive ? c : Theme.alpha(c, 90));
-            g.fill(new Ellipse2D.Double(1023, y + 16, 12, 12));
-
-            g.setFont(Theme.semibold(14));
-            String label = Brush.ellipsize(g, name, 118);
-            Brush.text(g, label, 1052, y + 20, Theme.semibold(14), s.alive ? Theme.TEXT : Theme.MUTED);
-            Brush.right(g, String.valueOf(s.score), 1206, y + 20, Theme.semibold(15), Theme.ACCENT);
-
-            g.setColor(new Color(0x2E, 0x38, 0x46));
-            g.fill(new RoundRectangle2D.Double(1052, y + 28, 154, 4, 4, 4));
-            g.setColor(Theme.alpha(c, s.alive ? 220 : 90));
-            g.fill(new RoundRectangle2D.Double(1052, y + 28, 154 * (s.score / (double) max), 4, 4, 4));
-
-            if (s.id == app.myId()) {
-                g.setColor(Theme.alpha(Theme.ACCENT, 140));
-                g.setStroke(new BasicStroke(1.2f));
-                g.draw(new RoundRectangle2D.Double(1012, y, 200, 44, 12, 12));
-            }
-        }
-
-        int ping = app.client() == null ? -1 : app.client().rttMs();
-        String stats = "PING " + (ping < 0 ? "--" : ping + "ms")
-                + "   TICK " + cfg.tickRate
-                + "   FPS " + win.fps();
-        Brush.text(g, stats, 1016, 640, Theme.font(10), Theme.DIM);
-        int recon = corrections + snaps;
-        Brush.text(g, "RECON " + recon + "  SNAP " + snaps + "  INT " + Math.round(interpDelayMs) + "ms",
-                1016, 658, Theme.font(10),
-                recon > 0 ? Theme.YELLOW : Theme.MUTED);
-
-        gRtt.paint(g, 1016, 668, 192, 32, Theme.ACCENT2, 120);
-        gRecon.paint(g, 1016, 706, 192, 24, Theme.YELLOW, Math.max(4, lastReconPeak));
-    }
     private void paintOverlays(Graphics2D g) {
-        // отсчёт
+        
         if (phase == Protocol.PHASE_COUNT && countdown > 0) {
             g.setColor(new Color(0, 0, 0, 110));
             g.fill(Brush.round(boardX, boardY, boardW, boardH, 8));
             double cx = boardX + boardW / 2;
             double cy = boardY + boardH / 2;
-            Brush.centered(g, "ПРИГОТОВЬСЯ", cx, cy - 96, Theme.semibold(18), Theme.DIM);
+            Brush.centered(g, "GET READY", cx, cy - 96, Theme.semibold(18), Theme.DIM);
             float size = (float) (128 + countdownAnim * 40);
             int alpha = (int) (120 + 135 * countdownAnim);
             Brush.glowText(g, String.valueOf(countdown), cx, cy + 40, Theme.display(size),
@@ -1067,35 +1380,35 @@ public final class GameScreen extends Screen {
             double k = goFlash;
             double cx = boardX + boardW / 2;
             double cy = boardY + boardH * 0.30;
-            Brush.centered(g, "ПОЕХАЛИ!", cx, cy, Theme.display((float) (28 + k * 6)),
+            Brush.centered(g, "GO!", cx, cy, Theme.display((float) (28 + k * 6)),
                     Theme.alpha(Theme.ACCENT, (int) (255 * k)));
         }
 
-        // «ты выбыл»
+        
         if (deadBanner > 0.02 && phase == Protocol.PHASE_RUNNING) {
             int a = (int) (200 * deadBanner);
             g.setColor(new Color(0x18, 0x08, 0x0C, a));
             g.fill(new RoundRectangle2D.Double(boardX + boardW / 2 - 150, boardY + 16, 300, 38, 19, 19));
-            Brush.centered(g, "Ты выбыл · наблюдаешь", boardX + boardW / 2, boardY + 41,
+            Brush.centered(g, "You are out · spectating", boardX + boardW / 2, boardY + 41,
                     Theme.semibold(14), new Color(0xFF, 0xA0, 0xA0, Math.min(255, a + 40)));
         }
 
-        // результаты
+        
         if (phase == Protocol.PHASE_OVER && results != null) {
             g.setColor(new Color(0, 0, 0, 175));
             g.fillRect(0, 0, VW, VH);
             g.setColor(new Color(0x0C, 0x15, 0x24, 250));
             g.fill(Brush.round(340, 150, 600, 480, 26));
             Brush.panel(g, 340, 150, 600, 480, 26);
-            Brush.centered(g, "ИГРА ОКОНЧЕНА", 640, 206, Theme.semibold(13), Theme.MUTED);
+            Brush.centered(g, "GAME OVER", 640, 206, Theme.semibold(13), Theme.MUTED);
 
             String winner = "";
             for (Result r : results) {
                 if (r.place == 1) winner = r.name;
             }
-            Brush.glowText(g, winner.isEmpty() ? "Ничья" : winner, 640, 262, Theme.display(42),
+            Brush.glowText(g, winner.isEmpty() ? "Draw" : winner, 640, 262, Theme.display(42),
                     Theme.TEXT, Theme.ACCENT, 4);
-            Brush.centered(g, "побеждает", 640, 288, Theme.font(14), Theme.DIM);
+            Brush.centered(g, "wins", 640, 288, Theme.font(14), Theme.DIM);
 
             int shown = Math.min(results.size(), 6);
             for (int i = 0; i < shown; i++) {
@@ -1115,13 +1428,13 @@ public final class GameScreen extends Screen {
             }
         }
 
-        // меню по Esc
+        
         if (pauseAnim > 0.01) {
             g.setColor(new Color(0, 0, 0, (int) (170 * pauseAnim)));
             g.fillRect(0, 0, VW, VH);
             Brush.panel(g, 440, 270, 400, 260, 24);
-            Brush.centered(g, "Выйти из игры?", 640, 330, Theme.display(26), Theme.TEXT);
-            Brush.centered(g, app.isHost() ? "Ты хост — сервер закроется для всех" : "Партия продолжится без тебя",
+            Brush.centered(g, "Leave the game?", 640, 330, Theme.display(26), Theme.TEXT);
+            Brush.centered(g, app.isHost() ? "You are the host — the server will close for everyone" : "The round will continue without you",
                     640, 358, Theme.font(13), Theme.MUTED);
         }
     }

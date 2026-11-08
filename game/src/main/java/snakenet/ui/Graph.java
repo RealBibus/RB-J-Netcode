@@ -6,7 +6,7 @@ import java.awt.Graphics2D;
 import java.awt.geom.Line2D;
 import java.awt.geom.Rectangle2D;
 
-/** Спарклайн: история значений и подпись последнего. */
+
 public final class Graph {
 
     private final double[] values;
@@ -70,7 +70,8 @@ public final class Graph {
         }
 
         Brush.text(g, label, x + 6, y + 13, Theme.bold(10), Theme.DIM);
-        String value = unit.isEmpty()
+        
+        String value = last() < 0 ? "—" : unit.isEmpty()
                 ? String.format("%.0f", last())
                 : String.format("%.0f %s", last(), unit);
         Brush.right(g, value, x + w - 6, y + 13, Theme.font(11), color);
