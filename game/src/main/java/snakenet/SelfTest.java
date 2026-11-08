@@ -48,6 +48,8 @@ public final class SelfTest {
         testBeacon();
         testMsg();
         testConfig();
+        testReconnect();
+        testSecondRound();
         testFullRound();
         System.out.println();
         System.out.println("ИТОГО: passed=" + passed + ", failed=" + failed);
@@ -421,6 +423,16 @@ public final class SelfTest {
             return set;
         }
 
+        int maxTick() {
+            int max = 0;
+            synchronized (frames) {
+                for (List<Msg> f : frames) {
+                    for (Msg m : f) if (m.is(Protocol.SNAP)) max = Math.max(max, m.num("t", 0));
+                }
+            }
+            return max;
+        }
+
         int lobbyPlayers() {
             List<Msg> frame = lastFrameWith(Protocol.LOBBY);
             if (frame == null) return -1;
@@ -428,6 +440,78 @@ public final class SelfTest {
             for (Msg m : frame) if (m.is(Protocol.PLAYER)) n++;
             return n;
         }
+    }
+
+    /** Второй раунд не должен ломать нумерацию тиков и ввод. */
+    private static void testSecondRound() throws Exception {
+        System.out.println(" [второй раунд]".trim());
+        GameConfig cfg = new GameConfig();
+        cfg.applySize(0);
+        cfg.cellsPerSec = 15;
+        cfg.tickRate = 64;
+        GameServer server = new GameServer(0, "Тест", cfg);
+        server.start();
+        int port = server.port();
+
+        List<Collect> clients = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            Collect c = new Collect();
+            c.client = GameClient.connect("127.0.0.1", port, c);
+            clients.add(c);
+            c.client.send(Msg.of(Protocol.HELLO).putStr("name", "И" + i).put("color", i));
+            Thread.sleep(120);
+        }
+        Collect host = clients.get(0);
+        check("оба в лобби", waitFor(() -> host.lobbyPlayers() == 2, 3000));
+
+        host.client.send(Msg.of(Protocol.START));
+        check("первый раунд закончился", waitFor(() -> host.count(Protocol.OVER) > 0, 20000));
+        int tickRound1 = host.maxTick();
+
+        host.client.send(Msg.of(Protocol.AGAIN));
+        check("вернулись в лобби", waitFor(() -> {
+            Msg l = host.last(Protocol.LOBBY);
+            return l != null && l.num("phase", -1) == Protocol.PHASE_LOBBY;
+        }, 4000));
+
+        host.client.send(Msg.of(Protocol.START));
+        int before = host.count(Protocol.SNAP);
+        check("второй раунд пошёл", waitFor(() -> host.count(Protocol.SNAP) > before + 5, 6000));
+        check("тики не откатились назад", host.maxTick() > tickRound1,
+                "было " + tickRound1 + ", стало " + host.maxTick());
+
+        int pid = host.last(Protocol.WELCOME).num("pid", -1);
+        int tick = host.last(Protocol.SNAP) == null ? 1 : host.last(Protocol.SNAP).num("t", 1);
+        host.client.send(Msg.of(Protocol.IN).put("d", 0).put("t", tick + 4).put("s", 0.5).put("n", 1));
+        check("во втором раунде ввод работает", waitFor(() -> hasAck(host, pid, 1), 4000));
+
+        for (Collect c : clients) c.client.close();
+        server.stop();
+    }
+
+    /** Переподключение с тем же токеном не должно плодить дубли игрока. */
+    private static void testReconnect() throws Exception {
+        System.out.println("[переподключение]");
+        GameConfig cfg = new GameConfig();
+        cfg.applySize(0);
+        GameServer server = new GameServer(0, "Тест", cfg);
+        server.start();
+        int port = server.port();
+
+        Collect first = new Collect();
+        first.client = GameClient.connect("127.0.0.1", port, first);
+        first.client.send(Msg.of(Protocol.HELLO).putStr("name", "Вася").put("color", 0).putStr("token", "tok-A"));
+        check("первый вошёл", waitFor(() -> first.lobbyPlayers() == 1, 3000));
+
+        Collect second = new Collect();
+        second.client = GameClient.connect("127.0.0.1", port, second);
+        second.client.send(Msg.of(Protocol.HELLO).putStr("name", "Вася").put("color", 0).putStr("token", "tok-A"));
+        check("старая сессия выкинута", waitFor(() -> first.count(Protocol.KICK) > 0, 2000));
+        check("игрок не двоится", waitFor(() -> second.lobbyPlayers() == 1, 3000),
+                "было " + second.lobbyPlayers());
+
+        second.client.close();
+        server.stop();
     }
 
     private static void testFullRound() throws Exception {

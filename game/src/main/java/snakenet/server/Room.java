@@ -61,6 +61,7 @@ public final class Room {
 
         final List<Input> inputs = new ArrayList<>();
         int ackSeq;
+        String token = "";
 
         Player(int id, String name, int color, boolean bot, netcore.net.Connection connection) {
             this.id = id;
@@ -84,12 +85,16 @@ public final class Room {
 
     private final List<Player> players = new ArrayList<>();
     private final Map<Integer, Player> byId = new LinkedHashMap<>();
+    private final Map<String, Player> byToken = new HashMap<>();
     private final List<Food> foods = new ArrayList<>();
     private final List<Msg> events = new ArrayList<>();
 
     private netcore.time.TickRunner runner;
     private Phase phase = Phase.LOBBY;
     private int tick;
+    /** Смещение нумерации: тик обязан монотонно расти между раундами и перезапусками цикла. */
+    private int tickBase;
+    private int lastRunnerTick;
     private int countTicksLeft;
     private int lastCountShown = -1;
     private int nextId = 1;
@@ -140,7 +145,8 @@ public final class Room {
     private void onTick(int tickNumber, double lagMs) {
         synchronized (this) {
             if (closed) return;
-            tick = tickNumber;
+            lastRunnerTick = tickNumber;
+            tick = tickBase + tickNumber;
             try {
                 if (phase == Phase.COUNT) countdownTick();
                 else if (phase == Phase.RUNNING) gameTick();
@@ -163,8 +169,23 @@ public final class Room {
         if (p != null) leave(p.id);
     }
 
-    synchronized void onJoin(netcore.net.Connection connection, String rawName, int color) {
+    synchronized void onJoin(netcore.net.Connection connection, String rawName, int color, String token) {
         if (closed) return;
+        // тот же игрок переподключился (оборвался UDP, перезашёл) — старую сессию выкидываем,
+        // иначе он двоится: старая висит до таймаута, новая уже в игре
+        if (token != null && !token.isEmpty()) {
+            Player old = byToken.get(token);
+            if (old != null && old.connection != connection) {
+                String oldName = old.name;
+                if (old.connection != null) {
+                    server.send(old.connection, Wire.encode(List.of(
+                            Msg.of(Protocol.KICK).putStr("msg", "Сессия открыта в другом окне"))));
+                    old.connection.close();
+                }
+                leave(old.id);
+                system(oldName + ": сессия переподключилась");
+            }
+        }
         if (players.size() >= cfg.maxPlayers) {
             server.send(connection, Wire.encode(List.of(
                     Msg.of(Protocol.ERR).putStr("msg", "Лобби заполнено"))));
@@ -175,6 +196,8 @@ public final class Room {
         Player p = new Player(nextId++, name, Math.floorMod(color, 10), false, connection);
         players.add(p);
         byId.put(p.id, p);
+        p.token = token == null ? "" : token;
+        if (!p.token.isEmpty()) byToken.put(p.token, p);
         connection.attachment = p;
 
         List<Msg> hello = new ArrayList<>();
@@ -200,6 +223,7 @@ public final class Room {
         Player p = byId.remove(playerId);
         if (p == null) return;
         players.remove(p);
+        if (p.token != null && !p.token.isEmpty()) byToken.remove(p.token, p);
         if (p.connection != null) p.connection.attachment = null;
         boolean wasAlive = p.snake != null && p.snake.alive;
         if (wasAlive) {
@@ -261,7 +285,7 @@ public final class Room {
         boolean restart = false;
         for (Msg m : frame) {
             if (m.is(Protocol.HELLO)) {
-                if (p == null) onJoin(connection, m.str("name"), m.num("color", 0));
+                if (p == null) onJoin(connection, m.str("name"), m.num("color", 0), m.str("token"));
                 continue;
             }
             if (p == null) continue;
@@ -379,7 +403,9 @@ public final class Room {
         if (old != null) old.stop();
         synchronized (this) {
             if (closed) return;
-            tick = 0;
+            tickBase += lastRunnerTick;
+            lastRunnerTick = 0;
+            tick = tickBase;
             snapshotEvery = Math.max(1, Math.round(cfg.tickRate / 30f));
             runner = new netcore.time.TickRunner(cfg.tickConfig(), this::onTick);
             runner.start();
@@ -440,7 +466,6 @@ public final class Room {
     }
 
     private void resetRound() {
-        tick = 0;
         foods.clear();
         events.clear();
         lastOver = List.of();
@@ -488,7 +513,6 @@ public final class Room {
     private void beginRun() {
         phase = Phase.RUNNING;
         countTicksLeft = 0;
-        tick = 0;
         broadcastSnapshot();
     }
 

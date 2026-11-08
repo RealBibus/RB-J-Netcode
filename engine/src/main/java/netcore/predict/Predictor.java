@@ -84,9 +84,9 @@ public final class Predictor<S> {
     public synchronized S advanceTo(int tick) {
         if (predicted == null) return null;
         if (tick <= predictedTick) return predicted;
-        if (tick - predictedTick > 512) {
-            // защита от гигантского прыжка времени
-            tick = predictedTick + 512;
+        if (tick - predictedTick > 64) {
+            // защита от прыжка времени: лучше подождать сервер, чем просимулировать сотни тиков
+            tick = predictedTick + 64;
         }
         while (predictedTick < tick) {
             predictedTick++;

@@ -44,6 +44,11 @@ public final class Prefs {
         return Boolean.parseBoolean(props.getProperty(key, String.valueOf(def)));
     }
 
+    /** Подменить значение только для превью (на диск не пишется). */
+    public void setPreview(String key, String value) {
+        props.setProperty(key, value);
+    }
+
     public void set(String key, Object value) {
         props.setProperty(key, String.valueOf(value));
         save();

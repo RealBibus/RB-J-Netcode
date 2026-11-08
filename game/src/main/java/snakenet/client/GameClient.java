@@ -3,6 +3,7 @@ package snakenet.client;
 import netcore.net.NetClient;
 import netcore.sync.ClockSync;
 import snakenet.net.Msg;
+import snakenet.net.Protocol;
 import snakenet.net.Wire;
 
 import javax.swing.SwingUtilities;
@@ -29,7 +30,7 @@ public final class GameClient implements NetClient.Listener {
     }
 
     public static GameClient connect(String host, int port, Listener listener) throws IOException {
-        return connect(host, port, listener, netcore.net.NetConfig.udp(true));
+        return connect(host, port, listener, netcore.net.NetConfig.udp(true).withConnectTimeout(450));
     }
 
     public static GameClient connect(String host, int port, Listener listener,
@@ -58,6 +59,12 @@ public final class GameClient implements NetClient.Listener {
         }
         List<Msg> frame = Wire.decode(payload);
         SwingUtilities.invokeLater(() -> listener.onFrame(frame));
+        for (Msg m : frame) {
+            if (m.is(Protocol.KICK)) {
+                close();
+                break;
+            }
+        }
     }
 
     /** Голосовой кадр, без подтверждений. */

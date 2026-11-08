@@ -211,7 +211,18 @@ public final class App {
             if (c != null) c.sendVoice(frame);
         });
         voice.start();
-        client.send(Msg.of(Protocol.HELLO).putStr("name", myName).put("color", myColor));
+        client.send(Msg.of(Protocol.HELLO).putStr("name", myName).put("color", myColor)
+                .putStr("token", sessionToken()));
+    }
+
+    /** Стабильный id устройства: сервер по нему выкидывает старую сессию при переподключении. */
+    public String sessionToken() {
+        String token = prefs.get("token", "");
+        if (token.isEmpty()) {
+            token = java.util.UUID.randomUUID().toString();
+            prefs.set("token", token);
+        }
+        return token;
     }
 
     public VoiceChat voice() {

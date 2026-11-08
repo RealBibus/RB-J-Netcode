@@ -31,6 +31,8 @@ public final class NetClient implements Transport.Listener, AutoCloseable {
     private Thread heartbeat;
     private volatile boolean closed;
     private volatile String protocol = "?";
+    private volatile long lastPongNanos;
+    private volatile long lastPacketNanos;
 
     private NetClient(Transport transport, Listener listener) {
         this.transport = transport;
@@ -134,6 +136,12 @@ public final class NetClient implements Transport.Listener, AutoCloseable {
                     ByteBuffer buf = ByteBuffer.allocate(8);
                     buf.putLong(now);
                     transport.send(new Packet(Packet.PING, 0, buf.array(), false));
+                    long last = lastPacketNanos;
+                    if (last != 0 && System.nanoTime() - last > 8_000_000_000L) {
+                        onClosed("сервер не отвечает 8 с");
+                        close();
+                        return;
+                    }
                     Thread.sleep(400);
                 } catch (InterruptedException e) {
                     return;
@@ -146,11 +154,13 @@ public final class NetClient implements Transport.Listener, AutoCloseable {
 
     @Override
     public void onPacket(Packet packet) {
+        lastPacketNanos = System.nanoTime();
         if (packet.type == Packet.PONG && packet.payload.length >= 16) {
             ByteBuffer buf = ByteBuffer.wrap(packet.payload);
             long sent = buf.getLong();
             long server = buf.getLong();
             clock.onPong(sent, server, System.nanoTime());
+            lastPongNanos = System.nanoTime();
             return;
         }
         if (packet.type == Packet.DATA) {

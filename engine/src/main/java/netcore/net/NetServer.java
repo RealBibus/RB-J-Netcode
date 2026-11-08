@@ -160,14 +160,18 @@ public final class NetServer implements AutoCloseable {
                 break;
             }
             SocketAddress from = datagram.getSocketAddress();
+            boolean connect = datagram.getLength() >= 1 && buffer[0] == UdpPeer.T_CONNECT;
             UdpPeer peer = udpPeers.get(from);
             if (peer != null) {
-                peer.onDatagram(buffer, datagram.getLength());
+                if (connect) {
+                    // повторный CONNECT: ACCEPT потерялся — отвечаем ещё раз
+                    UdpPeer.sendAccept(udpSocket, from);
+                } else {
+                    peer.onDatagram(buffer, datagram.getLength());
+                }
                 continue;
             }
-            if (datagram.getLength() >= 1 && buffer[0] == UdpPeer.T_CONNECT) {
-                acceptUdp(from);
-            }
+            if (connect) acceptUdp(from);
         }
     }
 

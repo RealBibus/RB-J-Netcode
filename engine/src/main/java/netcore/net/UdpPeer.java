@@ -29,6 +29,8 @@ final class UdpPeer implements Transport {
     static final byte T_PONG = 13;
     static final byte T_CONNECT = 14;
     static final byte T_ACCEPT = 15;
+    /** Пустой пакет только с подтверждениями. */
+    static final byte T_ACK = 16;
 
     private static final int HEADER = 1 + 4 + 4;
     private static final int FRAG_HEADER = 4 + 1 + 1;
@@ -58,6 +60,7 @@ final class UdpPeer implements Transport {
     private int nextId = 1;
     private int lastDelivered;
     private int ackBits;
+    private long lastAckSent;
 
     private volatile long lastRecv = System.nanoTime();
     private volatile boolean open = true;
@@ -131,7 +134,7 @@ final class UdpPeer implements Transport {
         while (it.hasNext()) {
             Outgoing o = it.next();
             if (now - o.lastSent < config.resendMs() * 1_000_000L) continue;
-            if (o.attempts > 80) {
+            if (o.attempts > 200) {
                 it.remove();
                 closeWithReason("не удалось доставить сообщение");
                 return;
@@ -251,6 +254,8 @@ final class UdpPeer implements Transport {
                 case T_PONG:
                     control = new Packet(Packet.PONG, 0, rest(b), false);
                     break;
+                case T_ACK:
+                    break;
                 default:
                     break;
             }
@@ -289,8 +294,27 @@ final class UdpPeer implements Transport {
             deliver.add(message);
             advanceAck();
             drainReady(deliver);
+            sendAckSoon();
         } else if (id > lastDelivered + 1) {
             ready.put(id, message);
+        }
+    }
+
+    /** Подтверждаем сразу, иначе отправитель будет досылать до таймаута. */
+    private void sendAckSoon() {
+        long now = System.nanoTime();
+        if (now - lastAckSent < 10_000_000L) return;
+        lastAckSent = now;
+        ByteBuffer b = ByteBuffer.allocate(HEADER);
+        b.put(T_ACK).putInt(lastDelivered).putInt(ackBits);
+        byte[] data = b.array();
+        if (remote == null) {
+            try {
+                socket.send(new DatagramPacket(data, data.length));
+            } catch (IOException ignored) {
+            }
+        } else {
+            sendDatagram(data);
         }
     }
 

@@ -24,7 +24,8 @@ public final class GameServer {
     public GameServer(int port, String name, GameConfig cfg) {
         this.name = name == null || name.isBlank() ? "Игра" : name;
         this.room = new Room(this, cfg);
-        this.net = new NetServer(port, netcore.net.NetConfig.udp(cfg.tcpFallback), new NetServer.Listener() {
+        this.net = new NetServer(port, cfg.udp ? netcore.net.NetConfig.udp(false) : netcore.net.NetConfig.tcp(),
+                new NetServer.Listener() {
             @Override
             public void onConnect(Connection connection) {
                 room.onConnect(connection);

@@ -93,8 +93,7 @@ public final class ServerClock {
             return;
         }
         if (Math.abs(delta) > 6) {
-            tickOffset = delta;
-            targetOffset = delta;
+            // мусорный ответ (например, старый seq после рестарта раунда) — игнорируем
             return;
         }
         targetOffset = Math.max(-6, Math.min(6, targetOffset + delta * 0.5));

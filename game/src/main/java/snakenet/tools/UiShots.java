@@ -31,7 +31,10 @@ public final class UiShots {
             throw new IllegalStateException("не могу создать " + dir.getAbsolutePath());
         }
         netcore.net.NetInfo.setPreviewIp("192.168.1.42");
-        app = new App(new Prefs());
+        Prefs preview = new Prefs();
+        preview.setPreview("name", "Игрок");
+        preview.setPreview("port", "45800");
+        app = new App(preview);
         app.prepareOffscreenWindow();
         app.setPreviewId(1);
 

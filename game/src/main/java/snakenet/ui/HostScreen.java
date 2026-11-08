@@ -20,7 +20,7 @@ public final class HostScreen extends Screen {
     private int speedIndex;
     private int tickIndex;
     private boolean subtick = true;
-    private boolean tcpFallback = true;
+    private boolean udp = true;
     private boolean walls = true;
     private int color;
 
@@ -70,8 +70,8 @@ public final class HostScreen extends Screen {
             subtick = !subtick;
             syncChips();
         }));
-        bTcp = add(new NeonButton("TCP запасной: вкл", NeonButton.Style.CHIP, 100, 540, 340, 44, () -> {
-            tcpFallback = !tcpFallback;
+        bTcp = add(new NeonButton("Транспорт: UDP", NeonButton.Style.CHIP, 100, 540, 340, 44, () -> {
+            udp = !udp;
             syncChips();
         }));
         add(new NeonButton("Назад", NeonButton.Style.SECONDARY, 56, 44, 100, 42, () -> win.show(app.homeScreen())));
@@ -93,8 +93,8 @@ public final class HostScreen extends Screen {
         bWalls.selected = walls;
         bWalls.label = walls ? "Смерть о стену" : "Сквозь стены";
         bSubtick.selected = subtick;
-        bTcp.selected = tcpFallback;
-        bTcp.label = tcpFallback ? "TCP запасной: вкл" : "TCP запасной: выкл";
+        bTcp.selected = udp;
+        bTcp.label = udp ? "Транспорт: UDP" : "Транспорт: TCP";
     }
 
     private void startServer() {
@@ -119,7 +119,7 @@ public final class HostScreen extends Screen {
         cfg.applyTickRate(tickIndex);
         cfg.subtick = subtick;
         cfg.walls = walls;
-        cfg.tcpFallback = tcpFallback;
+        cfg.udp = udp;
         cfg.serverName = name;
         app.prefs().set("port", port);
         try {

@@ -339,6 +339,8 @@ public final class GameScreen extends Screen {
         countdownAnim = 1;
         prev = null;
         cur = null;
+        snapHistory.clear();
+        sentTicks.clear();
         particles.clear();
         floats.clear();
         results = null;
@@ -372,7 +374,8 @@ public final class GameScreen extends Screen {
         Snapshot snap = Snapshot.parse(frame, System.nanoTime());
         if (snap == null) return;
         // UDP может переставить пакеты — старый снимок не должен откатывать состояние
-        if (cur != null && snap.tick <= cur.tick) return;
+        if (cur != null && (snap.tick <= cur.tick
+                || (snap.serverNanos > 0 && snap.serverNanos <= cur.serverNanos))) return;
         boolean first = cur == null;
         long now = System.nanoTime();
         if (lastSnapRecv != 0) {

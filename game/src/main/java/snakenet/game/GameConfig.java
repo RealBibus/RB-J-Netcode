@@ -23,7 +23,7 @@ public final class GameConfig {
     public int subSteps = 4;
     public int maxPlayers = 8;
     public boolean walls = true;
-    public boolean tcpFallback = true;
+    public boolean udp = true;
     public String serverName = "Игра";
 
     public GameConfig copy() {
@@ -36,7 +36,7 @@ public final class GameConfig {
         c.subSteps = subSteps;
         c.maxPlayers = maxPlayers;
         c.walls = walls;
-        c.tcpFallback = tcpFallback;
+        c.udp = udp;
         c.serverName = serverName;
         return c;
     }
@@ -111,7 +111,7 @@ public final class GameConfig {
                 .put("cps", cellsPerSec).put("rate", tickRate)
                 .put("sub", subtick ? 1 : 0).put("subs", subSteps)
                 .put("walls", walls ? 1 : 0).put("max", maxPlayers)
-                .put("tcp", tcpFallback ? 1 : 0);
+                .put("udp", udp ? 1 : 0);
     }
 
     public static GameConfig read(Msg m, GameConfig def) {
@@ -123,7 +123,7 @@ public final class GameConfig {
         c.subtick = m.num("sub", c.subtick ? 1 : 0) == 1;
         c.subSteps = clamp(m.num("subs", c.subSteps), 1, 16);
         if (m.has("walls")) c.walls = m.bool("walls");
-        if (m.has("tcp")) c.tcpFallback = m.num("tcp", 1) == 1;
+        if (m.has("udp")) c.udp = m.num("udp", 1) == 1;
         c.maxPlayers = clamp(m.num("max", c.maxPlayers), 1, 8);
         return c;
     }
