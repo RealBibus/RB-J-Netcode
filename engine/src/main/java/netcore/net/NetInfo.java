@@ -49,7 +49,15 @@ public final class NetInfo {
         return 1;
     }
 
+    private static volatile String previewIp;
+
+    /** Подменить адрес для скриншотов, чтобы не светить реальный. */
+    public static void setPreviewIp(String ip) {
+        previewIp = ip;
+    }
+
     public static String primaryIp() {
+        if (previewIp != null) return previewIp;
         List<Address> list = localAddresses();
         return list.isEmpty() ? "127.0.0.1" : list.get(0).ip;
     }

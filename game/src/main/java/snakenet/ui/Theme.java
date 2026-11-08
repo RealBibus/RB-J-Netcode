@@ -7,46 +7,45 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-/** Цвета и шрифты. Тёмный фон, тёплый янтарный акцент, без неона. */
+/** Палитра «инженерного стенда»: тёмный графит, моноширинный шрифт, зелёный акцент. */
 public final class Theme {
 
-    public static final Color BG = new Color(0x0D, 0x10, 0x15);
-    public static final Color BG2 = new Color(0x12, 0x17, 0x1E);
-    public static final Color PANEL = new Color(0x18, 0x1E, 0x27);
-    public static final Color PANEL_2 = new Color(0x1F, 0x27, 0x32);
-    public static final Color LINE = new Color(0x2C, 0x36, 0x42);
-    public static final Color TEXT = new Color(0xF1, 0xEA, 0xDE);
-    public static final Color DIM = new Color(0x9E, 0xA8, 0xB3);
-    public static final Color MUTED = new Color(0x66, 0x71, 0x7D);
+    public static final Color BG = new Color(0x0A, 0x0C, 0x0E);
+    public static final Color BG2 = new Color(0x0C, 0x0F, 0x12);
+    public static final Color PANEL = new Color(0x10, 0x14, 0x17);
+    public static final Color PANEL_2 = new Color(0x16, 0x1B, 0x1F);
+    public static final Color LINE = new Color(0x24, 0x2C, 0x33);
+    public static final Color TEXT = new Color(0xD6, 0xDE, 0xE5);
+    public static final Color DIM = new Color(0x8B, 0x99, 0xA5);
+    public static final Color MUTED = new Color(0x5A, 0x66, 0x70);
 
-    public static final Color ACCENT = new Color(0xF2, 0xAF, 0x5C);
-    public static final Color ACCENT_DARK = new Color(0xB8, 0x77, 0x2F);
-    public static final Color ACCENT2 = new Color(0x6F, 0xC9, 0xBC);
-    public static final Color MAGENTA = new Color(0xD9, 0x6B, 0x77);
-    public static final Color YELLOW = new Color(0xE8, 0xC9, 0x6A);
-    public static final Color DANGER = new Color(0xE0, 0x6C, 0x75);
-    public static final Color GOLD = new Color(0xE8, 0xC9, 0x6A);
+    public static final Color ACCENT = new Color(0x7E, 0xE7, 0x87);
+    public static final Color ACCENT_DARK = new Color(0x2E, 0xA0, 0x43);
+    public static final Color ACCENT2 = new Color(0x58, 0xA6, 0xFF);
+    public static final Color MAGENTA = new Color(0xF8, 0x51, 0x49);
+    public static final Color YELLOW = new Color(0xD2, 0x99, 0x22);
+    public static final Color DANGER = new Color(0xF8, 0x51, 0x49);
+    public static final Color GOLD = new Color(0xD2, 0x99, 0x22);
 
     /** Цвета игроков: индекс приходит по сети. */
     public static final Color[] PLAYER = {
-            new Color(0xE8, 0xB4, 0x5C),
-            new Color(0x63, 0xC7, 0xB2),
-            new Color(0xE8, 0xD9, 0xB5),
-            new Color(0xDD, 0x6C, 0x75),
-            new Color(0xA4, 0x8B, 0xD4),
-            new Color(0xE6, 0x83, 0x6B),
-            new Color(0x6F, 0xA8, 0xDC),
-            new Color(0xB5, 0xC4, 0x6B),
-            new Color(0xD7, 0x7F, 0xA8),
-            new Color(0x8F, 0xD9, 0xC0),
+            new Color(0x7E, 0xE7, 0x87),
+            new Color(0x58, 0xA6, 0xFF),
+            new Color(0xD2, 0x99, 0x22),
+            new Color(0xF8, 0x51, 0x49),
+            new Color(0xBC, 0x8C, 0xFF),
+            new Color(0xF0, 0x88, 0x3E),
+            new Color(0x39, 0xC5, 0xCF),
+            new Color(0xA5, 0xD6, 0x4E),
+            new Color(0xDB, 0x61, 0xA2),
+            new Color(0x56, 0xD3, 0x64),
     };
 
     public static final String FAMILY = pick(
-            "Segoe UI", "Inter", "Noto Sans", "Tahoma", "Arial");
+            "Cascadia Mono", "Consolas", "JetBrains Mono", "Courier New", "Monospaced");
     public static final String DISPLAY = pick(
-            "Segoe UI Black", "Segoe UI", "Arial Black", "Arial");
-    public static final String MONO = pick(
-            "Cascadia Mono", "Consolas", "Courier New");
+            "Cascadia Mono", "Consolas", "JetBrains Mono", "Courier New", "Monospaced");
+    public static final String MONO = FAMILY;
 
     private Theme() {
     }
@@ -60,7 +59,7 @@ public final class Theme {
             }
         } catch (Throwable ignored) {
         }
-        return Font.SANS_SERIF;
+        return Font.MONOSPACED;
     }
 
     public static Font font(float size) {
@@ -72,7 +71,7 @@ public final class Theme {
     }
 
     public static Font semibold(float size) {
-        return new Font(FAMILY, Font.PLAIN, 100).deriveFont(Font.BOLD, size);
+        return new Font(FAMILY, Font.BOLD, 100).deriveFont(size);
     }
 
     public static Font display(float size) {
@@ -99,7 +98,6 @@ public final class Theme {
                 (int) (a.getAlpha() + (b.getAlpha() - a.getAlpha()) * t));
     }
 
-    /** Затемнить/высветлить цвет для объёма сегментов. */
     public static Color shade(Color c, double amount) {
         if (amount >= 0) {
             return mix(c, Color.WHITE, (float) Math.min(1, amount));

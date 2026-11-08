@@ -18,6 +18,8 @@ public final class Protocol {
     public static final String START = "START";
     public static final String AGAIN = "AGAIN";
     public static final String PING = "PING";
+    /** Хост просит выкинуть игрока: {@code KICK|p=3}. */
+    public static final String KICK_PLAYER = "KICK";
 
     // ---- сервер -> клиент ----
     public static final String WELCOME = "WELCOME";
@@ -28,6 +30,8 @@ public final class Protocol {
     public static final String PONG = "PONG";
     public static final String ERR = "ERR";
     public static final String KICK = "KICK";
+    /** Подтверждение ввода с реальным тиком применения: {@code A|n=17|t=105}. */
+    public static final String ACK = "A";
 
     // ---- строки данных внутри кадра ----
     public static final String PLAYER = "P";   // строка списка игроков

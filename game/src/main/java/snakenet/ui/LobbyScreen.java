@@ -72,6 +72,24 @@ public final class LobbyScreen extends Screen {
         add(new NeonButton("Выйти", NeonButton.Style.DANGER, 1128, 720, 96, 52, () -> app.leaveToHome()));
 
         addHotspot(900, 92, 324, 46, this::copyAddress);
+
+        getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(javax.swing.KeyStroke.getKeyStroke("pressed K"), "pttOn");
+        getActionMap().put("pttOn", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                if (chatField.hasFocus() || app.voice() == null) return;
+                app.voice().setTalking(true);
+            }
+        });
+        getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(javax.swing.KeyStroke.getKeyStroke("released K"), "pttOff");
+        getActionMap().put("pttOff", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                if (app.voice() != null) app.voice().setTalking(false);
+            }
+        });
     }
 
     private void copyAddress() {
@@ -175,6 +193,21 @@ public final class LobbyScreen extends Screen {
         hostId = host;
     }
 
+    private int pendingKick = -1;
+    private long pendingKickAt;
+
+    private void requestKick(int id) {
+        long now = System.currentTimeMillis();
+        if (pendingKick == id && now - pendingKickAt < 3000) {
+            app.send(Msg.of(Protocol.KICK_PLAYER).put("p", id));
+            pendingKick = -1;
+        } else {
+            pendingKick = id;
+            pendingKickAt = now;
+            app.toast("Ещё раз по игроку — выкинуть");
+        }
+    }
+
     private void refreshButtons() {
         boolean host = app.isHost();
         Roster me = me();
@@ -199,6 +232,17 @@ public final class LobbyScreen extends Screen {
         bReady.selected = me != null && me.ready;
         bReady.label = me != null && me.ready ? "Не готов" : "Готов";
         bStart.enabled = !players.isEmpty();
+
+        clearHotspots();
+        addHotspot(900, 92, 324, 46, this::copyAddress);
+        if (host) {
+            for (int i = 0; i < players.size(); i++) {
+                Roster r = players.get(i);
+                if (r.id == app.myId() || r.bot) continue;
+                final int id = r.id;
+                addHotspot(76, 236 + i * 50, 720, 44, () -> requestKick(id));
+            }
+        }
     }
 
     @Override

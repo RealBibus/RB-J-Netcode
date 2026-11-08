@@ -53,15 +53,21 @@ public final class NetServer implements AutoCloseable {
 
     public synchronized void start() throws IOException {
         if (running) return;
-        int port = requestedPort;
-        int attempts = requestedPort == 0 ? 8 : 1;
+        int port = requestedPort == 0 ? randomPort() : requestedPort;
+        int attempts = requestedPort == 0 ? 12 : 1;
         IOException lastError = null;
 
-        // TCP сначала: он сам выбирает свободный порт, а UDP садится на тот же номер
+        // UDP первым: Windows отдаёт разные диапазоны под TCP и UDP, и порт,
+        // выбранный TCP, может быть запрещён для UDP (excludedportrange)
         for (int attempt = 0; attempt < attempts; attempt++) {
             ServerSocket tcp = null;
             DatagramSocket udp = null;
             try {
+                if (config.listenUdp()) {
+                    udp = new DatagramSocket(port);
+                    udp.setReceiveBufferSize(256 * 1024);
+                    port = udp.getLocalPort();
+                }
                 if (config.listenTcp()) {
                     try {
                         tcp = new ServerSocket();
@@ -69,15 +75,10 @@ public final class NetServer implements AutoCloseable {
                         tcp.bind(new InetSocketAddress(port));
                         port = tcp.getLocalPort();
                     } catch (IOException e) {
-                        if (!config.listenUdp() || config.preferred() == NetConfig.Protocol.TCP) throw e;
+                        if (udp == null || requestedPort == 0) throw e;
                         System.err.println("[netcore] TCP недоступен, работаем только на UDP: " + e.getMessage());
-                        port = requestedPort;
+                        tcp = null;
                     }
-                }
-                if (config.listenUdp()) {
-                    udp = new DatagramSocket(port);
-                    udp.setReceiveBufferSize(256 * 1024);
-                    port = udp.getLocalPort();
                 }
                 serverSocket = tcp;
                 udpSocket = udp;
@@ -92,10 +93,9 @@ public final class NetServer implements AutoCloseable {
                 }
                 if (udp != null) udp.close();
                 if (attempt == attempts - 1) throw e;
-                port = 0;
+                port = randomPort();
             }
-        }
-        if (serverSocket == null && udpSocket == null) {
+        }        if (serverSocket == null && udpSocket == null) {
             throw lastError == null ? new IOException("не удалось занять порт") : lastError;
         }
 
@@ -212,6 +212,11 @@ public final class NetServer implements AutoCloseable {
         if (packet.type == Packet.DATA) {
             listener.onMessage(connection, packet.payload);
         }
+    }
+
+    /** Свободный порт вне системных диапазонов (там Windows отдаёт exclusion-списки). */
+    private static int randomPort() {
+        return 24000 + java.util.concurrent.ThreadLocalRandom.current().nextInt(20000);
     }
 
     public int port() {

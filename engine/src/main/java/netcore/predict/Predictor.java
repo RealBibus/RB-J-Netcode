@@ -68,6 +68,18 @@ public final class Predictor<S> {
         return cmd;
     }
 
+    /**
+     * Сервер сказал, на каком тике он реально применил ввод. Правим метку,
+     * чтобы переигровка шла по серверному таймлайну, а не по нашему прогнозу.
+     */
+    public synchronized void retime(int seq, int applyTick) {
+        for (InputCommand c : pending) {
+            if (c.seq != seq) continue;
+            if (applyTick > c.tick) c.tick = applyTick;
+            return;
+        }
+    }
+
     /** Просимулировать до тика включительно. */
     public synchronized S advanceTo(int tick) {
         if (predicted == null) return null;

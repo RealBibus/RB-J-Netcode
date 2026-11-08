@@ -357,6 +357,10 @@ public final class SelfTest {
         }
 
         @Override
+        public void onVoice(int playerId, short[] pcm) {
+        }
+
+        @Override
         public void onClosed(String reason) {
             closed = true;
         }

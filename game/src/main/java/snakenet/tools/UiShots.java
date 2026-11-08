@@ -30,11 +30,15 @@ public final class UiShots {
         if (!dir.exists() && !dir.mkdirs()) {
             throw new IllegalStateException("не могу создать " + dir.getAbsolutePath());
         }
+        netcore.net.NetInfo.setPreviewIp("192.168.1.42");
         app = new App(new Prefs());
         app.prepareOffscreenWindow();
         app.setPreviewId(1);
 
-        shoot(app.homeScreen(), new File(dir, "1-menu.png"), 40);
+        app.log("engine netcore 1.0 initialised (UDP + TCP)");
+        app.log("local address 192.168.1.42, port 45800 free");
+        app.log("awaiting session: create or join");
+        shoot(app.homeScreen(), new File(dir, "1-menu.png"), 900);
         shoot(app.hostScreen(), new File(dir, "2-create.png"), 10);
         shoot(app.joinScreen(), new File(dir, "3-join.png"), 10);
 
@@ -57,7 +61,7 @@ public final class UiShots {
     private static void shoot(Screen screen, File file, int ticks) throws Exception {
         screen.setSize(1280, 800);
         screen.doLayout();
-        for (int i = 0; i < ticks; i++) screen.tick(1 / 60.0);
+        for (int i = 0; i < ticks; i++) screen.tick(0.0145 + (i % 7) * 0.0009);
         BufferedImage img = new BufferedImage(1280, 800, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -137,6 +141,9 @@ public final class UiShots {
         Msg start = Msg.of(Protocol.START).put("phase", 1).put("n", 3);
         new GameConfig().write(start);
         game.onFrame(List.of(start));
+        game.onFrame(List.of(chat("Аня", "я справа, не режь", 3, 0)));
+        game.onFrame(List.of(chat("", "Бот Кобра выбыл", 0, 1)));
+        game.onFrame(List.of(chat("Вася", "ok", 0, 0)));
         game.onFrame(snapshot(1, 100, false));
         game.onFrame(snapshot(2, 100, true));
     }

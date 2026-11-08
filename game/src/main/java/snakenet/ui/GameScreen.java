@@ -77,6 +77,14 @@ public final class GameScreen extends Screen {
     }
 
     private final Map<Integer, PlayerInfo> names = new HashMap<>();
+    private final java.util.List<String[]> chatLines = new java.util.ArrayList<>();
+    private final Map<Integer, Integer> sentTicks = new HashMap<>();
+    private final Graph gRtt = new Graph("RTT", "мс", 110);
+    private final Graph gRecon = new Graph("РЕКОНСАЙЛ", "", 110);
+    private InputField chatField;
+    private boolean chatOpen;
+    private double telemetryTimer;
+    private double chatScroll;
     private final java.util.ArrayDeque<Snapshot> snapHistory = new java.util.ArrayDeque<>();
     private final List<Particle> particles = new ArrayList<>();
     private final List<FloatText> floats = new ArrayList<>();
@@ -109,8 +117,15 @@ public final class GameScreen extends Screen {
     private volatile int renderTick;
     private volatile double renderSub;
 
+    // сглаживание своей змейки: резкие правки доводим за ~90 мс, а не телепортом
+    private double[] localRender;
+    private double[] localDelta;
+    private double localBlend = 1;
+
     private double snapshotIntervalMs = 50;
     private long lastSnapRecv;
+    private int lastReconTotal;
+    private double lastReconPeak = 4;
 
     private double cell = 28;
     private double boardX = 56;
@@ -143,6 +158,51 @@ public final class GameScreen extends Screen {
         bind("S", 2);
         bind("LEFT", 3);
         bind("A", 3);
+
+        chatField = new InputField("сообщение…");
+        chatField.setVisible(false);
+        addField(chatField, 380, 700, 520, 36, 12);
+        chatField.addActionListener(e -> sendChat());
+
+        getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("ENTER"), "chatopen");
+        getActionMap().put("chatopen", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (phase != Protocol.PHASE_RUNNING) return;
+                chatOpen = true;
+                chatField.setVisible(true);
+                chatField.requestFocusInWindow();
+            }
+        });
+        getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("ESCAPE"), "chatclose");
+        getActionMap().put("chatclose", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (chatOpen) {
+                    chatOpen = false;
+                    chatField.setVisible(false);
+                    chatField.setText("");
+                    requestFocusInWindow();
+                } else {
+                    pauseMenu = !pauseMenu;
+                }
+            }
+        });
+        getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("pressed K"), "ptt_on");
+        getActionMap().put("ptt_on", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (chatOpen || app.voice() == null) return;
+                app.voice().setTalking(true);
+            }
+        });
+        getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("released K"), "ptt_off");
+        getActionMap().put("ptt_off", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (app.voice() != null) app.voice().setTalking(false);
+            }
+        });
         getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
                 .put(KeyStroke.getKeyStroke("ESCAPE"), "pause");
         getActionMap().put("pause", new AbstractAction() {
@@ -158,7 +218,7 @@ public final class GameScreen extends Screen {
         getActionMap().put("dir" + dir, new AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                if (pauseMenu) return;
+                if (pauseMenu || chatOpen) return;
                 if (phase != Protocol.PHASE_RUNNING) return;
                 handleInput(dir);
             }
@@ -205,6 +265,29 @@ public final class GameScreen extends Screen {
                     break;
                 case Protocol.RESULT:
                     addResult(m);
+                    break;
+                case Protocol.ACK: {
+                    int n = m.num("n", -1);
+                    int at = m.num("t", -1);
+                    Integer sent = sentTicks.remove(n);
+                    if (sent != null) serverClock.observeApply(sent, at);
+                    if (predictor != null) predictor.retime(n, at);
+                    break;
+                }
+                case Protocol.CHAT: {
+                    String text = m.str("text");
+                    if (text.isEmpty()) break;
+                    boolean system = m.num("kind", 0) == 1;
+                    chatLines.add(new String[]{m.str("from"), text, system ? "1" : "0", String.valueOf(m.num("c", 0))});
+                    if (chatLines.size() > 80) chatLines.remove(0);
+                    if (system) {
+                        String lower = text.toLowerCase(java.util.Locale.ROOT);
+                        if (lower.contains("подключ") || lower.contains("выкинут")) Sfx.play(Sfx.Sound.JOIN);
+                    }
+                    break;
+                }
+                case Protocol.KICK:
+                    app.toastError(m.str("msg"));
                     break;
                 default:
                     break;
@@ -258,6 +341,9 @@ public final class GameScreen extends Screen {
         predictor = new Predictor<>(new SnakePredictState.Model(cols, rows, cfg.unitsPerTick(), cfg.walls),
                 PredictionConfig.of(2.2));
         predicted = null;
+        localRender = null;
+        localDelta = null;
+        localBlend = 1;
         corrections = 0;
         snaps = 0;
         correctionFlash = 0;
@@ -324,13 +410,14 @@ public final class GameScreen extends Screen {
 
     /** Локальное нажатие: сразу в предсказание и на сервер. */
     private void handleInput(int dir) {
-        if (predictor == null || app.client() == null) return;
+        if (chatOpen || predictor == null || app.client() == null) return;
         ClockSync clock = app.client().clock();
         int tick = serverClock.tickAt(clock) + serverClock.leadTicks(clock);
         float sub = (float) serverClock.subAt(clock);
         InputCommand command = predictor.push(dir, tick, sub);
         if (command == null) return;
         predicted = predictor.predicted();
+        sentTicks.put(command.seq, command.tick);
         app.send(Msg.of(Protocol.IN)
                 .put("d", dir)
                 .put("t", command.tick)
@@ -435,13 +522,25 @@ public final class GameScreen extends Screen {
 
         correctionFlash = Math.max(0, correctionFlash - dt * 2.2);
 
+        telemetryTimer += dt;
+        if (telemetryTimer >= 0.25) {
+            telemetryTimer = 0;
+            gRtt.push(app.client() == null ? 0 : Math.max(0, app.client().rttMs()));
+            int total = corrections + snaps;
+            gRecon.push(Math.max(0, total - lastReconTotal));
+            lastReconTotal = total;
+            lastReconPeak = Math.max(lastReconPeak * 0.98, Math.max(1, total - lastReconTotal + 1));
+        }
+
         if (predictor != null && predictor.ready() && app.client() != null
                 && phase == Protocol.PHASE_RUNNING) {
             ClockSync clock = app.client().clock();
-            renderTick = serverClock.tickAt(clock);
-            renderSub = serverClock.subAt(clock);
+            double pos = serverClock.tickPosition(clock);
+            renderTick = (int) Math.floor(pos);
+            renderSub = pos - renderTick;
             predictor.advanceTo(renderTick);
             predicted = predictor.predicted();
+            updateLocalRender(dt);
         }
     }
 
@@ -469,7 +568,49 @@ public final class GameScreen extends Screen {
         paintBoard(board);
         board.dispose();
         paintSidebar(g);
+        paintChat(g);
         paintOverlays(g);
+    }
+
+    private void sendChat() {
+        String text = chatField.getText().trim();
+        if (!text.isEmpty()) app.send(Msg.of(Protocol.CHAT).putStr("text", text));
+        chatField.setText("");
+        chatOpen = false;
+        chatField.setVisible(false);
+        requestFocusInWindow();
+    }
+
+    /** Чат поверх поля: последние сообщения и подсказка. */
+    private void paintChat(Graphics2D g) {
+        if (chatLines.isEmpty() && !chatOpen) return;
+        int from = Math.max(0, chatLines.size() - 7);
+        int count = chatLines.size() - from;
+        double lineH = 18;
+        double top = boardY + boardH - 18 - count * lineH;
+        double width = 420;
+
+        g.setColor(new Color(0, 0, 0, 150));
+        g.fill(new Rectangle2D.Double(boardX + 8, top - 16, width + 16, count * lineH + 12));
+        g.setColor(Theme.LINE);
+        g.draw(new Rectangle2D.Double(boardX + 8.5, top - 15.5, width + 15, count * lineH + 11));
+
+        double y = top;
+        for (int i = from; i < chatLines.size(); i++) {
+            String[] line = chatLines.get(i);
+            boolean system = "1".equals(line[2]);
+            String text = system ? line[1] : line[0] + ": " + line[1];
+            Color color = system ? Theme.MUTED : Theme.player(Integer.parseInt(line[3]));
+            g.setFont(Theme.font(11));
+            Brush.text(g, Brush.ellipsize(g, text, width), boardX + 16, y, Theme.font(11), color);
+            y += lineH;
+        }
+
+        if (chatOpen) {
+            Brush.text(g, "ENTER - отправить, ESC - закрыть", boardX + 380, 690, Theme.font(10), Theme.MUTED);
+        } else {
+            Brush.text(g, "ENTER - чат   K - голос", boardX + 16, boardY + boardH - 16, Theme.font(9), Theme.MUTED);
+        }
     }
 
     private void paintTopBar(Graphics2D g) {
@@ -579,7 +720,7 @@ public final class GameScreen extends Screen {
     }
     private double[] pointsFor(Snapshot.SnakeView s) {
         if (s.id == app.myId() && predicted != null && predicted.alive && predicted.length() > 0) {
-            double[] local = predictedPoints();
+            double[] local = localRender != null ? localRender : computePredictedPoints();
             if (local != null) return local;
         }
         return remotePoints(s.id);
@@ -704,8 +845,53 @@ public final class GameScreen extends Screen {
         }
     }
 
+    /**
+     * Сглаживание своей змейки. Обычные кадры рисуются как есть, но если
+     * сервер прислал правку и позиция скакнула — доводим её за ~90 мс,
+     * чтобы поворот не выглядел рывком.
+     */
+    private void updateLocalRender(double dt) {
+        double[] target = computePredictedPoints();
+        if (target == null) {
+            localRender = null;
+            localDelta = null;
+            localBlend = 1;
+            return;
+        }
+        if (localRender == null || localRender.length != target.length) {
+            localRender = target.clone();
+            localDelta = null;
+            localBlend = 1;
+            return;
+        }
+        if (localDelta == null) {
+            double jump = maxDistance(localRender, target);
+            if (jump > 0.45 && jump < 6) {
+                localDelta = new double[target.length];
+                for (int i = 0; i < target.length; i++) localDelta[i] = localRender[i] - target[i];
+                localBlend = 0;
+            } else {
+                System.arraycopy(target, 0, localRender, 0, target.length);
+            }
+        }
+        if (localDelta != null) {
+            localBlend = Math.min(1, localBlend + dt / 0.09);
+            double k = 1 - localBlend * (2 - localBlend);
+            for (int i = 0; i < target.length && i < localDelta.length; i++) {
+                localRender[i] = target[i] + localDelta[i] * k;
+            }
+            if (localBlend >= 1) localDelta = null;
+        }
+    }
+
+    private static double maxDistance(double[] a, double[] b) {
+        double max = 0;
+        int n = Math.min(a.length, b.length);
+        for (int i = 0; i < n; i++) max = Math.max(max, Math.abs(a[i] - b[i]));
+        return max;
+    }
     /** Своя змейка: смешиваем непрерывные позиции двух соседних предсказанных тиков. */
-    private double[] predictedPoints() {
+    private double[] computePredictedPoints() {
         SnakePredictState a = predictor == null ? null : predictor.stateAt(renderTick - 1);
         SnakePredictState b = predictor == null ? null : predictor.stateAt(renderTick);
         if (b == null) b = predicted;
@@ -780,22 +966,17 @@ public final class GameScreen extends Screen {
         }
 
         int ping = app.client() == null ? -1 : app.client().rttMs();
-        String pingText = ping < 0 ? "—" : ping + " мс";
-        Brush.text(g, "ПИНГ", 1022, 640, Theme.semibold(10), Theme.MUTED);
-        Brush.text(g, pingText, 1022, 658, Theme.font(13), Theme.DIM);
-        Brush.text(g, "FPS", 1090, 640, Theme.semibold(10), Theme.MUTED);
-        Brush.text(g, String.valueOf(win.fps()), 1090, 658, Theme.font(13), Theme.DIM);
-        Brush.text(g, "ТИК", 1152, 640, Theme.semibold(10), Theme.MUTED);
-        Brush.text(g, String.valueOf(cfg.tickRate), 1152, 658, Theme.font(13), Theme.DIM);
+        String stats = "PING " + (ping < 0 ? "--" : ping + "ms")
+                + "   TICK " + cfg.tickRate
+                + "   FPS " + win.fps();
+        Brush.text(g, stats, 1016, 640, Theme.font(10), Theme.DIM);
+        int recon = corrections + snaps;
+        Brush.text(g, "RECON " + recon + "   SNAP " + snaps, 1016, 658, Theme.font(10),
+                recon > 0 ? Theme.YELLOW : Theme.MUTED);
 
-        Brush.text(g, "ТПХИ", 1022, 688, Theme.semibold(10), Theme.MUTED);
-        Brush.text(g, String.valueOf(snaps), 1022, 706, Theme.font(13),
-                snaps > 0 ? Theme.DANGER : Theme.DIM);
-        Brush.text(g, "ПРАВКИ", 1090, 688, Theme.semibold(10), Theme.MUTED);
-        Brush.text(g, String.valueOf(corrections), 1090, 706, Theme.font(13), Theme.DIM);
-        Brush.text(g, "ESC — меню", 1152, 706, Theme.font(11), Theme.MUTED);
+        gRtt.paint(g, 1016, 668, 192, 32, Theme.ACCENT2, 120);
+        gRecon.paint(g, 1016, 706, 192, 24, Theme.YELLOW, Math.max(4, lastReconPeak));
     }
-
     private void paintOverlays(Graphics2D g) {
         // отсчёт
         if (phase == Protocol.PHASE_COUNT && countdown > 0) {

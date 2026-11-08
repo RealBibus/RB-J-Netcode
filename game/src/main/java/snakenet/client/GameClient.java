@@ -15,6 +15,9 @@ public final class GameClient implements NetClient.Listener {
     public interface Listener {
         void onFrame(List<Msg> frame);
 
+        /** Пришёл голосовой кадр: 16 кГц, моно, 16 бит. */
+        void onVoice(int playerId, short[] pcm);
+
         void onClosed(String reason);
     }
 
@@ -43,8 +46,23 @@ public final class GameClient implements NetClient.Listener {
 
     @Override
     public void onMessage(byte[] payload) {
+        if (Wire.isVoice(payload)) {
+            int playerId = ((payload[1] & 0xff) << 8) | (payload[2] & 0xff);
+            int count = Math.max(0, (payload.length - 5) / 2);
+            short[] pcm = new short[count];
+            for (int i = 0; i < count; i++) {
+                pcm[i] = (short) ((payload[5 + i * 2] & 0xff) | ((payload[6 + i * 2] & 0xff) << 8));
+            }
+            SwingUtilities.invokeLater(() -> listener.onVoice(playerId, pcm));
+            return;
+        }
         List<Msg> frame = Wire.decode(payload);
         SwingUtilities.invokeLater(() -> listener.onFrame(frame));
+    }
+
+    /** Голосовой кадр, без подтверждений. */
+    public void sendVoice(byte[] frame) {
+        if (net != null && net.isOpen()) net.sendUnreliable(frame);
     }
 
     @Override

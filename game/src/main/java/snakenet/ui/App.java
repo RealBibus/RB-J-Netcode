@@ -2,6 +2,7 @@ package snakenet.ui;
 
 import snakenet.Prefs;
 import snakenet.audio.Sfx;
+import snakenet.audio.VoiceChat;
 import snakenet.client.GameClient;
 import snakenet.game.GameConfig;
 import snakenet.net.Msg;
@@ -21,6 +22,7 @@ public final class App {
 
     private MainWindow window;
     private GameClient client;
+    private VoiceChat voice;
     private GameServer server;
 
     private int myId = -1;
@@ -34,6 +36,8 @@ public final class App {
     private JoinScreen joinScreen;
     private LobbyScreen lobby;
     private GameScreen game;
+
+    private final java.util.List<String> log = new java.util.ArrayList<>();
 
     private String toast;
     private long toastUntil;
@@ -187,6 +191,12 @@ public final class App {
             }
 
             @Override
+            public void onVoice(int playerId, short[] pcm) {
+                VoiceChat v = voice;
+                if (v != null) v.onVoice(playerId, pcm);
+            }
+
+            @Override
             public void onClosed(String reason) {
                 if (holder[0] != null && holder[0] == client) {
                     onConnectionLost(reason);
@@ -195,7 +205,17 @@ public final class App {
         });
         client = holder[0];
         myId = -1;
+        if (voice != null) voice.stop();
+        voice = new VoiceChat(frame -> {
+            GameClient c = client;
+            if (c != null) c.sendVoice(frame);
+        });
+        voice.start();
         client.send(Msg.of(Protocol.HELLO).putStr("name", myName).put("color", myColor));
+    }
+
+    public VoiceChat voice() {
+        return voice;
     }
 
     public void send(Msg m) {
@@ -211,7 +231,14 @@ public final class App {
     private void closeConnections() {
         GameClient c = client;
         client = null;
-        if (c != null) c.close();
+        if (c != null) {
+            log("disconnected");
+            c.close();
+        }
+        if (voice != null) {
+            voice.stop();
+            voice = null;
+        }
         GameServer s = server;
         server = null;
         if (s != null) s.stop();
@@ -256,6 +283,7 @@ public final class App {
             switch (m.type()) {
                 case Protocol.WELCOME:
                     myId = m.num("pid", -1);
+                    log("connected, pid=" + myId + (hostGame ? " (host)" : " (client)"));
                     break;
                 case Protocol.START:
                     start = true;
@@ -294,6 +322,17 @@ public final class App {
     // всплывающие сообщения
     // ------------------------------------------------------------------
 
+    /** Пишем строку в журнал стенда. */
+    public void log(String text) {
+        String t = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        log.add(t + "  " + text);
+        if (log.size() > 300) log.remove(0);
+    }
+
+    public java.util.List<String> logLines() {
+        return log;
+    }
+
     public void toast(String text) {
         toast = text;
         toastError = false;
@@ -301,6 +340,7 @@ public final class App {
     }
 
     public void toastError(String text) {
+        log("error: " + text);
         toast = text;
         toastError = true;
         toastUntil = System.currentTimeMillis() + 4200;

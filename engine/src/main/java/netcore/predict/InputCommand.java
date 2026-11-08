@@ -4,8 +4,8 @@ package netcore.predict;
 public final class InputCommand {
 
     public final int seq;
-    /** Тик, в котором ввод должен быть применён. */
-    public final int tick;
+    /** Тик, в котором ввод должен быть применён. Сервер может прислать точный — тогда правим. */
+    public int tick;
     /** Доля тика 0..1 — используется в режиме {@code SUBTICK}. */
     public final float sub;
     /** Код действия; движку всё равно, игра его трактует. */

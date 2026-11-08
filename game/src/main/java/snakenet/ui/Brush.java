@@ -4,21 +4,21 @@ import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.FontMetrics;
-import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.Paint;
 import java.awt.Shape;
-import java.awt.geom.RoundRectangle2D;
+import java.awt.geom.Rectangle2D;
 
-/** Помощники рисования: панели, кнопки, текст. */
+/** Рисование в стиле стенда: прямоугольники, тонкие линии, подписи моно. */
 public final class Brush {
 
     private Brush() {
     }
 
+    /** Скругление оставлено только для совместимости — стенд рисует прямыми углами. */
     public static Shape round(double x, double y, double w, double h, double r) {
-        double rr = Math.min(r, Math.min(w, h) / 2);
-        return new RoundRectangle2D.Double(x, y, w, h, rr * 2, rr * 2);
+        double rr = Math.min(r, 3);
+        return new Rectangle2D.Double(x, y, w, h);
     }
 
     public static void fill(Graphics2D g, Shape s, Paint p) {
@@ -32,24 +32,28 @@ public final class Brush {
         g.draw(s);
     }
 
-    /** Панель: плотная заливка, тонкая рамка и жёсткая тень — как наклейка. */
+    /** Панель: плоская заливка и рамка в один пиксель. */
     public static void panel(Graphics2D g, double x, double y, double w, double h, double r) {
-        double rr = Math.min(r, 18);
-        g.setColor(new Color(0, 0, 0, 90));
-        g.fill(round(x + 4, y + 5, w, h, rr));
         g.setColor(Theme.PANEL);
-        g.fill(round(x, y, w, h, rr));
-        border(g, round(x + 0.5, y + 0.5, w - 1, h - 1, rr), Theme.LINE, 1.4f);
+        g.fill(new Rectangle2D.Double(x, y, w, h));
+        g.setColor(Theme.LINE);
+        g.setStroke(new BasicStroke(1f));
+        g.draw(new Rectangle2D.Double(x + 0.5, y + 0.5, w - 1, h - 1));
     }
 
-    /** Мягкое свечение — теперь почти не используется, оставлено для акцентов. */
+    /** Панель с заголовком-полоской. */
+    public static void panelTitled(Graphics2D g, double x, double y, double w, double h, String title) {
+        panel(g, x, y, w, h, 0);
+        g.setColor(Theme.PANEL_2);
+        g.fill(new Rectangle2D.Double(x, y, w, 26));
+        g.setColor(Theme.LINE);
+        g.draw(new Rectangle2D.Double(x + 0.5, y + 0.5, w - 1, h - 1));
+        g.draw(new java.awt.geom.Line2D.Double(x, y + 26.5, x + w, y + 26.5));
+        text(g, title, x + 10, y + 18, Theme.bold(11), Theme.DIM);
+    }
+
     public static void glow(Graphics2D g, Shape s, Color c, int layers, double spread) {
-        for (int i = layers; i >= 1; i--) {
-            float t = i / (float) layers;
-            g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), (int) (16 * (1 - t) + 6)));
-            g.setStroke(new BasicStroke((float) (spread * t * 2 + 1), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            g.draw(s);
-        }
+        // заглушка: свечение в этом стиле не используется
     }
 
     public static void text(Graphics2D g, String s, double x, double baseline, Font f, Color c) {
@@ -72,13 +76,8 @@ public final class Brush {
         g.drawString(s, (float) (rx - fm.stringWidth(s)), (float) baseline);
     }
 
-    /** Текст с лёгкой тенью — читается на любом фоне. */
     public static void shadowText(Graphics2D g, String s, double x, double baseline, Font f, Color c, Color shadow) {
-        g.setFont(f);
-        g.setColor(shadow);
-        g.drawString(s, (float) (x + 2), (float) (baseline + 2));
-        g.setColor(c);
-        g.drawString(s, (float) x, (float) baseline);
+        text(g, s, x, baseline, f, c);
     }
 
     public static void glowText(Graphics2D g, String s, double cx, double baseline, Font f, Color core, Color halo, int strength) {
@@ -86,12 +85,7 @@ public final class Brush {
     }
 
     public static void gradientText(Graphics2D g, String s, double x, double baseline, Font f, Color a, Color b) {
-        g.setFont(f);
-        FontMetrics fm = g.getFontMetrics();
-        int w = Math.max(1, fm.stringWidth(s));
-        g.setPaint(new GradientPaint((float) x, (float) baseline - f.getSize(), a,
-                (float) x + w, (float) baseline, b));
-        g.drawString(s, (float) x, (float) baseline);
+        text(g, s, x, baseline, f, b);
     }
 
     public static void divider(Graphics2D g, double x1, double y1, double x2, double y2, Color c) {
@@ -100,7 +94,15 @@ public final class Brush {
         g.drawLine((int) x1, (int) y1, (int) x2, (int) y2);
     }
 
-    /** Текст с переносом по словам в заданную ширину. Возвращает высоту. */
+    /** Сегмент шкалы: заполненная часть и остаток. */
+    public static void bar(Graphics2D g, double x, double y, double w, double h, double value, Color color) {
+        g.setColor(Theme.PANEL_2);
+        g.fill(new Rectangle2D.Double(x, y, w, h));
+        double v = Math.max(0, Math.min(1, value));
+        g.setColor(color);
+        g.fill(new Rectangle2D.Double(x, y, w * v, h));
+    }
+
     public static double wrapped(Graphics2D g, String text, double x, double y, double maxWidth,
                                  Font f, Color c, double lineHeight) {
         g.setFont(f);
@@ -133,9 +135,9 @@ public final class Brush {
         FontMetrics fm = g.getFontMetrics();
         if (fm.stringWidth(s) <= maxWidth) return s;
         String cut = s;
-        while (cut.length() > 1 && fm.stringWidth(cut + "…") > maxWidth) {
+        while (cut.length() > 1 && fm.stringWidth(cut + "~") > maxWidth) {
             cut = cut.substring(0, cut.length() - 1);
         }
-        return cut + "…";
+        return cut + "~";
     }
 }

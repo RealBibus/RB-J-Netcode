@@ -32,6 +32,10 @@ public final class GameServer {
 
             @Override
             public void onMessage(Connection connection, byte[] payload) {
+                if (Wire.isVoice(payload)) {
+                    room.onVoice(connection, payload);
+                    return;
+                }
                 room.onMessage(connection, Wire.decode(payload));
             }
 
@@ -77,6 +81,13 @@ public final class GameServer {
     /** Снимки состояния: в UDP не досылаем, потеря не критична. */
     void broadcastUnreliable(byte[] payload) {
         net.broadcast(payload, false);
+    }
+
+    /** Голос — тоже без подтверждений, но и без себя самого. */
+    void broadcastVoice(byte[] payload, Connection except) {
+        for (Connection c : net.connections()) {
+            if (c != except && c.isOpen()) c.send(payload, false);
+        }
     }
 
     public String protocols() {

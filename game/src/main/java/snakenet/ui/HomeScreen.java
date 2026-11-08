@@ -1,43 +1,56 @@
 package snakenet.ui;
 
-import snakenet.audio.Sfx;
 import netcore.net.NetInfo;
+import snakenet.audio.Sfx;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
-import java.awt.geom.Path2D;
-import java.awt.geom.RoundRectangle2D;
+import java.awt.geom.Rectangle2D;
+import java.util.List;
 
-/** Главное меню. */
+/** Главный экран: пульт сессии, телеметрия и журнал. */
 public final class HomeScreen extends Screen {
 
+    private final InputField nameField;
     private final NeonButton bCreate;
     private final NeonButton bJoin;
-    private final NeonButton bHelp;
-    private final NeonButton bClose;
     private final NeonButton bSound;
+    private final NeonButton bFirewall;
 
-    private boolean help;
-    private double helpAnim;
+    private final Graph gFps = new Graph("FPS", "", 160);
+    private final Graph gFrame = new Graph("КАДР", "мс", 160);
+    private final Graph gMem = new Graph("ПАМЯТЬ", "МБ", 160);
+    private double sampleTimer;
+    private double frameMs = 16.0;
+    private double fpsSmoothed = 60;
 
     public HomeScreen(App app) {
         super(app);
-        bCreate = add(new NeonButton("Создать игру", NeonButton.Style.PRIMARY, 96, 506, 340, 64, this::openHost));
-        bJoin = add(new NeonButton("Подключиться", NeonButton.Style.SECONDARY, 96, 584, 340, 64, this::openJoin));
-        bHelp = add(new NeonButton("Как играть", NeonButton.Style.GHOST, 96, 660, 200, 38, this::toggleHelp));
-        bClose = add(new NeonButton("Понятно", NeonButton.Style.PRIMARY, 500, 566, 280, 56, this::toggleHelp));
-        bClose.visible = false;
-        bSound = add(new NeonButton("", NeonButton.Style.CHIP, 1120, 40, 120, 40, this::toggleSound));
+
+        nameField = new InputField("ник");
+        nameField.setText(app.prefs().get("name", app.myName()));
+        addField(nameField, 56, 126, 300, 38, 13);
+
+        bCreate = add(new NeonButton("Создать игру", NeonButton.Style.PRIMARY, 56, 186, 248, 50, () -> {
+            app.setNameAndColor(nameField.getText(), app.myColor());
+            win.show(app.hostScreen());
+        }));
+        bJoin = add(new NeonButton("Подключиться", NeonButton.Style.SECONDARY, 316, 186, 248, 50, () -> {
+            app.setNameAndColor(nameField.getText(), app.myColor());
+            win.show(app.joinScreen());
+        }));
+        bSound = add(new NeonButton("", NeonButton.Style.CHIP, 56, 252, 120, 28, this::toggleSound));
+        bFirewall = add(new NeonButton("брандмауэр", NeonButton.Style.CHIP, 184, 252, 120, 28, () ->
+                app.toast("Если друзья не видят игру — запусти allow-firewall.bat от админа")));
         updateSoundLabel();
     }
 
     private void updateSoundLabel() {
-        bSound.label = Sfx.isEnabled() ? "Звук: вкл" : "Звук: выкл";
-        bSound.selected = false;
+        bSound.label = Sfx.isEnabled() ? "звук: вкл" : "звук: выкл";
+        bSound.selected = Sfx.isEnabled();
     }
 
     private void toggleSound() {
@@ -47,183 +60,102 @@ public final class HomeScreen extends Screen {
         updateSoundLabel();
     }
 
-    private void openHost() {
-        win.show(app.hostScreen());
-    }
-
-    private void openJoin() {
-        win.show(app.joinScreen());
-    }
-
-    private void toggleHelp() {
-        help = !help;
-        bCreate.visible = !help;
-        bJoin.visible = !help;
-        bHelp.visible = !help;
-        bClose.visible = help;
-    }
-
     @Override
     protected void onTick(double dt) {
-        helpAnim += ((help ? 1 : 0) - helpAnim) * Math.min(1, dt * 12);
+        frameMs = frameMs * 0.9 + Math.min(200, dt * 1000) * 0.1;
+        fpsSmoothed = fpsSmoothed * 0.9 + win.fps() * 0.1;
+        sampleTimer += dt;
+        if (sampleTimer >= 0.15) {
+            sampleTimer = 0;
+            gFps.push(fpsSmoothed);
+            gFrame.push(frameMs);
+            Runtime rt = Runtime.getRuntime();
+            gMem.push((rt.totalMemory() - rt.freeMemory()) / (1024.0 * 1024.0));
+        }
     }
 
     @Override
     protected void paintScreen(Graphics2D g) {
-        paintTag(g, 96, 128, "ЛОКАЛЬНАЯ СЕТЬ · ДО 8 ИГРОКОВ");
-        Brush.gradientText(g, "SNAKE", 92, 300, Theme.display(116), Theme.TEXT, new Color(0xE8, 0xB4, 0x5C));
-        Brush.shadowText(g, "NET", 92, 416, Theme.display(116), Theme.ACCENT, new Color(0x2A, 0x1E, 0x12));
-
-        Brush.wrapped(g, "Змейка для своих: один создаёт игру, остальные заходят по адресу в той же сети.",
-                100, 470, 450, Theme.font(18), Theme.DIM, 26);
-
-        paintDecor(g);
-        paintFooter(g);
-        if (helpAnim > 0.01) paintHelp(g);
+        paintHeader(g);
+        paintSession(g);
+        paintSystem(g);
+        paintTelemetry(g);
+        paintLog(g);
     }
 
-    private void paintTag(Graphics2D g, double x, double y, String text) {
-        g.setFont(Theme.semibold(12));
-        int w = g.getFontMetrics().stringWidth(text) + 28;
-        g.setColor(new Color(0x1B, 0x22, 0x2C, 220));
-        g.fill(new RoundRectangle2D.Double(x, y - 20, w, 30, 30, 30));
-        g.setColor(new Color(0x3A, 0x44, 0x52));
-        g.setStroke(new BasicStroke(1f));
-        g.draw(new RoundRectangle2D.Double(x, y - 20, w, 30, 30, 30));
-        g.setColor(Theme.ACCENT);
-        g.drawString(text, (float) x + 14, (float) y);
+    private void paintHeader(Graphics2D g) {
+        g.setColor(Theme.PANEL);
+        g.fill(new Rectangle2D.Double(0, 0, VW, 48));
+        g.setColor(Theme.LINE);
+        g.draw(new Line2D.Double(0, 47.5, VW, 47.5));
+
+        Brush.text(g, "SNAKE.NET", 32, 30, Theme.bold(16), Theme.TEXT);
+        Brush.text(g, "// netcode test bench", 148, 30, Theme.font(12), Theme.MUTED);
+        Brush.right(g, "v1.1  //  netcore " + netcore.NetCore.VERSION, 1248, 30, Theme.font(11), Theme.DIM);
+
+        boolean connected = app.client() != null;
+        g.setColor(connected ? Theme.ACCENT : Theme.MUTED);
+        g.fill(new Ellipse2D.Double(1010, 19, 8, 8));
+        Brush.text(g, connected ? "ONLINE" : "OFFLINE", 1024, 30, Theme.bold(11),
+                connected ? Theme.ACCENT : Theme.MUTED);
     }
 
-    private void paintDecor(Graphics2D g) {
-        double x = 700;
-        double y = 120;
-        double w = 500;
-        double h = 560;
-        Brush.panel(g, x, y, w, h, 28);
+    private void paintSession(Graphics2D g) {
+        Brush.panelTitled(g, 32, 64, 560, 266, "СЕССИЯ");
 
-        double bx = x + 30;
-        double by = y + 30;
-        double bw = w - 60;
-        double bh = h - 130;
+        Brush.text(g, "ИМЯ ИГРОКА", 56, 118, Theme.font(10), Theme.MUTED);
 
-        g.setColor(new Color(0x0A, 0x0D, 0x12, 235));
-        g.fill(new RoundRectangle2D.Double(bx, by, bw, bh, 18, 18));
-        g.setColor(new Color(255, 255, 255, 9));
-        g.setStroke(new BasicStroke(1f));
-        for (double gx = bx + 37; gx < bx + bw; gx += 37) {
-            g.draw(new Line2D.Double(gx, by + 4, gx, by + bh - 4));
-        }
-        for (double gy = by + 37; gy < by + bh; gy += 37) {
-            g.draw(new Line2D.Double(bx + 4, gy, bx + bw - 4, gy));
-        }
-        g.setColor(new Color(255, 255, 255, 22));
-        g.draw(new RoundRectangle2D.Double(bx, by, bw, bh, 18, 18));
+        Brush.text(g, "СОЗДАТЬ СЕРВЕР НА ЭТОМ КОМПЬЮТЕРЕ", 56, 178, Theme.font(10), Theme.MUTED);
+        Brush.text(g, "ИЛИ ЗАЙТИ ПО АДРЕСУ ХОСТА", 316, 178, Theme.font(10), Theme.MUTED);
 
-        // еда
-        double[][] food = {{0.24, 0.24}, {0.72, 0.30}, {0.58, 0.78}};
-        for (int i = 0; i < food.length; i++) {
-            double fx = bx + bw * food[i][0];
-            double fy = by + bh * food[i][1];
-            double pulse = 1 + Math.sin(time * 2.4 + i * 1.7) * 0.12;
-            Color c = i == 1 ? Theme.YELLOW : Theme.MAGENTA;
-            g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), 40));
-            g.fill(new Ellipse2D.Double(fx - 14 * pulse, fy - 14 * pulse, 28 * pulse, 28 * pulse));
-            g.setColor(c);
-            g.fill(new Ellipse2D.Double(fx - 6, fy - 6, 12, 12));
-        }
-
-        // декоративная змейка
-        int n = 24;
-        double[] xs = new double[n];
-        double[] ys = new double[n];
-        for (int i = 0; i < n; i++) {
-            double tt = time - i * 0.085;
-            xs[i] = bx + bw / 2 + Math.sin(tt * 1.05) * bw * 0.30 + Math.sin(tt * 0.47 + 1.1) * bw * 0.10;
-            ys[i] = by + bh / 2 + Math.cos(tt * 0.83) * bh * 0.30 + Math.cos(tt * 0.41) * bh * 0.10;
-        }
-        // тело: сегменты от хвоста к голове
-        for (int i = n - 1; i >= 0; i--) {
-            float k = i / (float) n;
-            Color c = Theme.mix(Theme.ACCENT, Theme.ACCENT2, k);
-            double size = (i == 0 ? 30 : 26 - i * 0.35);
-            double rr = size * 0.30;
-            g.setColor(new Color(0, 0, 0, 90));
-            g.fill(Brush.round(xs[i] - size / 2 + 1.5, ys[i] - size / 2 + 2.5, size, size, rr));
-            g.setColor(c);
-            g.fill(Brush.round(xs[i] - size / 2, ys[i] - size / 2, size, size, rr));
-            g.setColor(Theme.alpha(Theme.shade(c, -0.45), 140));
-            g.setStroke(new BasicStroke(1.2f));
-            g.draw(Brush.round(xs[i] - size / 2, ys[i] - size / 2, size, size, rr));
-        }
-
-        double hx = xs[0];
-        double hy = ys[0];
-        double ang = Math.atan2(ys[0] - ys[1], xs[0] - xs[1]);
-        double dx = Math.cos(ang);
-        double dy = Math.sin(ang);
-        double ex = hx + dx * 4;
-        double ey = hy + dy * 4;
-        double perpX = -dy * 6;
-        double perpY = dx * 6;
-        g.setColor(new Color(0x12, 0x0E, 0x0A));
-        g.fill(new Ellipse2D.Double(ex + perpX - 2.6, ey + perpY - 2.6, 5.2, 5.2));
-        g.fill(new Ellipse2D.Double(ex - perpX - 2.6, ey - perpY - 2.6, 5.2, 5.2));
-        g.setColor(new Color(255, 255, 255, 220));
-        g.fill(new Ellipse2D.Double(ex + perpX - 1.1, ey + perpY - 1.1, 2.2, 2.2));
-        g.fill(new Ellipse2D.Double(ex - perpX - 1.1, ey - perpY - 1.1, 2.2, 2.2));
-
-        if (Math.sin(time * 5) > 0.55) {
-            double tbx = hx + dx * 15;
-            double tby = hy + dy * 15;
-            double tx = tbx + dx * 9;
-            double ty = tby + dy * 9;
-            g.setColor(new Color(0xD9, 0x5B, 0x66));
-            g.setStroke(new BasicStroke(1.9f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            g.draw(new Line2D.Double(tbx, tby, tx, ty));
-            g.draw(new Line2D.Double(tx, ty, tx + dx * 5 - dy * 4, ty + dy * 5 + dx * 4));
-            g.draw(new Line2D.Double(tx, ty, tx + dx * 5 + dy * 4, ty + dy * 5 - dx * 4));
-        }
-        Brush.text(g, "ПРИМЕР ПАРТИИ", x + 32, y + h - 62, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "3 игрока  ·  2 бота  ·  Wi-Fi", x + 32, y + h - 34, Theme.font(16), Theme.DIM);
-
-        // статус-точка
-        double pulse = 0.5 + 0.5 * Math.sin(time * 3);
-        g.setColor(new Color(0x6F, 0xC9, 0xBC, (int) (110 + pulse * 120)));
-        g.fill(new Ellipse2D.Double(x + w - 44, y + h - 56, 9, 9));
+        Brush.text(g, "K — голос в игре,  ESC — меню,  стрелки/WASD — поворот",
+                56, 306, Theme.font(11), Theme.DIM);
     }
 
-    private void paintFooter(Graphics2D g) {
-        String ip = NetInfo.primaryIp();
-        Brush.text(g, "ТВОЙ АДРЕС В СЕТИ", 96, 738, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, ip, 96, 768, Theme.mono(20), Theme.DIM);
-        Brush.text(g, "Друзьям нужен этот адрес и порт игры", 300, 768, Theme.font(14), Theme.MUTED);
-        Brush.text(g, "v1.0", 1184, 768, Theme.font(13), Theme.MUTED);
-    }
+    private void paintSystem(Graphics2D g) {
+        Brush.panelTitled(g, 32, 346, 560, 430, "СИСТЕМА");
 
-    private void paintHelp(Graphics2D g) {
-        g.setColor(new Color(0, 0, 0, (int) (170 * helpAnim)));
-        g.fillRect(0, 0, VW, VH);
-        double a = helpAnim;
-        g.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, (float) Math.min(1, a * 1.2)));
-        Brush.panel(g, 300, 170, 680, 470, 26);
-        Brush.text(g, "Как играть", 350, 236, Theme.display(34), Theme.TEXT);
-        Brush.text(g, "60 секунд на освоение", 352, 266, Theme.font(15), Theme.MUTED);
-
-        String[][] items = {
-                {"1", "Хост жмёт «Создать игру»", "Выбирает порт и настройки. Его компьютер становится сервером."},
-                {"2", "Друзья вводят адрес", "Тот же Wi-Fi: адрес вида 192.168.0.5 и порт, например 45800."},
-                {"3", "Или находят сами", "Экран «Подключиться» ловит игры в локальной сети автоматически."},
-                {"4", "Готовы — играем", "Стрелки или WASD. Ешь точки, не врезайся в стены и чужие хвосты."},
+        String[][] rows = {
+                {"java", System.getProperty("java.version")},
+                {"os", System.getProperty("os.name")},
+                {"адрес", NetInfo.primaryIp()},
+                {"порт по умолчанию", String.valueOf(app.prefs().getInt("port", 45800))},
+                {"движок", "netcore " + netcore.NetCore.VERSION + " (UDP/TCP)"},
+                {"микрофон", app.voice() == null ? "не подключён" : (app.voice().micOk() ? "ок" : "нет устройства")},
         };
-        double y = 320;
-        for (String[] item : items) {
-            g.setColor(new Color(0x2E, 0x38, 0x46));
-            g.fill(new Ellipse2D.Double(352, y - 22, 34, 34));
-            Brush.centered(g, item[0], 369, y + 1, Theme.semibold(16), Theme.ACCENT);
-            Brush.text(g, item[1], 404, y - 2, Theme.semibold(18), Theme.TEXT);
-            Brush.text(g, item[2], 404, y + 22, Theme.font(14), Theme.DIM);
-            y += 68;
+        double y = 400;
+        for (String[] row : rows) {
+            Brush.text(g, row[0], 56, y, Theme.font(11), Theme.MUTED);
+            Brush.text(g, row[1], 236, y, Theme.font(11), Theme.TEXT);
+            g.setColor(Theme.LINE);
+            g.draw(new Line2D.Double(56, y + 10, 568, y + 10));
+            y += 46;
         }
-        g.setComposite(java.awt.AlphaComposite.SrcOver);
+    }
+
+    private void paintTelemetry(Graphics2D g) {
+        Brush.panelTitled(g, 616, 64, 632, 394, "ТЕЛЕМЕТРИЯ  //  РЕНДЕР");
+
+        gFps.paint(g, 636, 104, 592, 84, Theme.ACCENT, 144);
+        gFrame.paint(g, 636, 198, 592, 84, Theme.ACCENT2, 50);
+        gMem.paint(g, 636, 292, 592, 84, Theme.YELLOW, 1024);
+
+        Brush.text(g, "графики обновляются 6 раз в секунду; значения — с этого процесса",
+                636, 430, Theme.font(10), Theme.MUTED);
+    }
+
+    private void paintLog(Graphics2D g) {
+        Brush.panelTitled(g, 616, 474, 632, 302, "ЖУРНАЛ");
+        List<String> lines = app.logLines();
+        int from = Math.max(0, lines.size() - 13);
+        double y = 512;
+        for (int i = from; i < lines.size(); i++) {
+            String line = lines.get(i);
+            Brush.text(g, line, 636, y, Theme.font(11), Theme.DIM);
+            y += 21;
+        }
+        if (lines.isEmpty()) {
+            Brush.text(g, "пока пусто — создай игру или подключись", 636, 520, Theme.font(11), Theme.MUTED);
+        }
     }
 }

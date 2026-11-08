@@ -6,8 +6,9 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Shape;
+import java.awt.geom.Rectangle2D;
 
-/** Кнопка: плотная заливка, рамка и жёсткая тень. Без свечения. */
+/** Кнопка стенда: прямоугольник, рамка в пиксель, моноширинная подпись. */
 public final class NeonButton {
 
     public enum Style { PRIMARY, SECONDARY, GHOST, CHIP, DANGER }
@@ -59,66 +60,56 @@ public final class NeonButton {
 
     public void paint(Graphics2D g) {
         if (!visible) return;
-        double hov = hover;
-        double r = style == Style.CHIP ? 8 : 11;
-        Shape shape = Brush.round(x, y, w, h, r);
-        boolean pressable = style != Style.GHOST;
-
-        if (pressable) {
-            // тень-подложка
-            g.setColor(new Color(0, 0, 0, enabled ? 110 : 60));
-            g.fill(Brush.round(x + 2, y + 3 + hov, w, h, r));
-        }
+        Shape shape = new Rectangle2D.Double(x, y, w, h);
+        boolean hot = hover > 0.05;
 
         switch (style) {
             case PRIMARY: {
-                Color base = enabled ? Theme.ACCENT : Theme.mix(Theme.ACCENT, Theme.PANEL, 0.65f);
-                g.setColor(Theme.shade(base, 0.08 * hov));
+                Color base = enabled ? (hot ? Theme.shade(Theme.ACCENT, 0.12) : Theme.ACCENT)
+                        : Theme.mix(Theme.ACCENT, Theme.PANEL, 0.7f);
+                g.setColor(base);
                 g.fill(shape);
-                g.setColor(Theme.alpha(Theme.shade(base, -0.35), 200));
-                g.setStroke(new BasicStroke(1.4f));
+                g.setColor(Theme.alpha(Theme.shade(base, -0.45), 220));
+                g.setStroke(new BasicStroke(1.2f));
                 g.draw(shape);
-                drawLabel(g, new Color(0x1A, 0x12, 0x08), 19, true);
+                label(g, upper(label), new Color(0x06, 0x14, 0x08), 13, true);
                 break;
             }
             case SECONDARY: {
-                g.setColor(hov > 0.05 ? Theme.PANEL_2 : Theme.PANEL);
+                g.setColor(hot ? Theme.PANEL_2 : Theme.PANEL);
                 g.fill(shape);
-                g.setColor(hov > 0.05 ? Theme.alpha(Theme.ACCENT, 180) : Theme.LINE);
-                g.setStroke(new BasicStroke(1.5f));
+                g.setColor(hot ? Theme.ACCENT : Theme.LINE);
+                g.setStroke(new BasicStroke(1.2f));
                 g.draw(shape);
-                drawLabel(g, enabled ? Theme.TEXT : Theme.MUTED, 18, true);
+                label(g, upper(label), enabled ? Theme.TEXT : Theme.MUTED, 13, true);
                 break;
             }
             case GHOST: {
-                drawLabel(g, Theme.alpha(Theme.DIM, (int) (200 + 55 * hov)), 17, false);
+                label(g, label, Theme.alpha(Theme.DIM, (int) (160 + 95 * hover)), 12, false);
                 break;
             }
             case CHIP: {
                 if (selected) {
                     g.setColor(Theme.ACCENT);
                     g.fill(shape);
-                    g.setColor(Theme.alpha(Theme.ACCENT_DARK, 220));
-                    g.setStroke(new BasicStroke(1.3f));
-                    g.draw(shape);
-                    drawLabel(g, new Color(0x1A, 0x12, 0x08), 15, true);
+                    label(g, label, new Color(0x06, 0x14, 0x08), 11, true);
                 } else {
-                    g.setColor(hov > 0.05 ? Theme.PANEL_2 : Theme.PANEL);
+                    g.setColor(hot ? Theme.PANEL_2 : Theme.PANEL);
                     g.fill(shape);
-                    g.setColor(hov > 0.05 ? Theme.alpha(Theme.ACCENT, 140) : Theme.LINE);
-                    g.setStroke(new BasicStroke(1.2f));
+                    g.setColor(hot ? Theme.ACCENT : Theme.LINE);
+                    g.setStroke(new BasicStroke(1f));
                     g.draw(shape);
-                    drawLabel(g, hov > 0.05 ? Theme.TEXT : Theme.DIM, 15, false);
+                    label(g, label, hot ? Theme.TEXT : Theme.DIM, 11, false);
                 }
                 break;
             }
             case DANGER: {
-                g.setColor(hov > 0.05 ? Theme.shade(Theme.DANGER, 0.1) : Theme.mix(Theme.DANGER, Theme.BG, 0.25f));
+                g.setColor(hot ? Theme.DANGER : Theme.PANEL);
                 g.fill(shape);
-                g.setColor(Theme.alpha(Theme.shade(Theme.DANGER, -0.4), 220));
-                g.setStroke(new BasicStroke(1.4f));
+                g.setColor(Theme.DANGER);
+                g.setStroke(new BasicStroke(1.2f));
                 g.draw(shape);
-                drawLabel(g, new Color(0x1C, 0x0C, 0x0E), 17, true);
+                label(g, upper(label), hot ? new Color(0x14, 0x06, 0x06) : Theme.DANGER, 12, true);
                 break;
             }
             default:
@@ -126,13 +117,17 @@ public final class NeonButton {
         }
     }
 
-    private void drawLabel(Graphics2D g, Color color, float size, boolean bold) {
-        Font f = bold ? Theme.semibold(size) : Theme.font(size);
+    private static String upper(String s) {
+        return s;
+    }
+
+    private void label(Graphics2D g, String text, Color color, float size, boolean bold) {
+        Font f = bold ? Theme.bold(size) : Theme.font(size);
         g.setFont(f);
         FontMetrics fm = g.getFontMetrics();
-        double tx = x + (w - fm.stringWidth(label)) / 2.0;
+        double tx = x + (w - fm.stringWidth(text)) / 2.0;
         double ty = y + h / 2.0 + (fm.getAscent() - fm.getDescent()) / 2.0;
         g.setColor(color);
-        g.drawString(label, (float) tx, (float) ty);
+        g.drawString(text, (float) tx, (float) ty);
     }
 }

@@ -286,6 +286,9 @@ public final class Room {
                 case Protocol.BOT:
                     if (isHost(p)) botCommand(m.raw("op"));
                     break;
+                case Protocol.KICK_PLAYER:
+                    if (isHost(p)) kick(p, m.num("p", -1));
+                    break;
                 case Protocol.START:
                     if (isHost(p)) startCountdown();
                     break;
@@ -299,8 +302,33 @@ public final class Room {
         return restart;
     }
 
-    private void chat(Player from, String text) {
-        String clean = text == null ? "" : text.replace('\n', ' ').replace('\r', ' ').trim();
+    /** Хост выкидывает игрока: отправляем сообщение и рвём соединение. */
+    private void kick(Player host, int targetId) {
+        Player target = byId.get(targetId);
+        if (target == null || target.id == host.id || target.bot) return;
+        if (target.connection != null) {
+            server.send(target.connection, Wire.encode(List.of(
+                    Msg.of(Protocol.KICK).putStr("msg", "Хост выкинул тебя из игры"))));
+            target.connection.close();
+        }
+        String name = target.name;
+        leave(target.id);
+        system(name + " выкинут хостом");
+    }
+
+    /** Голос: подставляем id говорящего и раздаём остальным без подтверждений. */
+    synchronized void onVoice(netcore.net.Connection connection, byte[] payload) {
+        Player p = connection.attachment instanceof Player ? (Player) connection.attachment : null;
+        if (p == null || payload.length < 4 || phase == Phase.LOBBY) return;
+        byte[] out = new byte[payload.length + 2];
+        out[0] = Wire.VOICE;
+        out[1] = (byte) (p.id >> 8);
+        out[2] = (byte) p.id;
+        System.arraycopy(payload, 1, out, 3, payload.length - 1);
+        server.broadcastVoice(out, connection);
+    }
+
+    private void chat(Player from, String text) {        String clean = text == null ? "" : text.replace('\n', ' ').replace('\r', ' ').trim();
         if (clean.isEmpty()) return;
         if (clean.length() > 200) clean = clean.substring(0, 200);
         Msg m = Msg.of(Protocol.CHAT).putStr("from", from.name).putStr("text", clean).put("kind", 0)
@@ -549,6 +577,7 @@ public final class Room {
                 continue;
             }
             Input chosen = null;
+            List<Msg> acks = null;
             Iterator<Input> it = p.inputs.iterator();
             while (it.hasNext()) {
                 Input in = it.next();
@@ -559,10 +588,15 @@ public final class Room {
                     chosen = in;
                 }
                 p.ackSeq = Math.max(p.ackSeq, in.seq);
+                if (acks == null) acks = new ArrayList<>(2);
+                acks.add(Msg.of(Protocol.ACK).put("n", in.seq).put("t", tick));
                 it.remove();
             }
             if (chosen != null && !SnakeState.isOpposite(chosen.dir, s.dir)) {
                 s.dir = chosen.dir;
+            }
+            if (acks != null && p.connection != null) {
+                server.send(p.connection, Wire.encode(acks));
             }
         }
 
