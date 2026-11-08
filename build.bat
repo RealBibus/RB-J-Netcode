@@ -33,39 +33,54 @@ if not defined JDK (
   exit /b 1
 )
 
-echo   Компилирую на JDK !MAJOR! ...
-if exist "out\classes" rmdir /s /q "out\classes"
-mkdir "out\classes" 2>nul
-
-> "%TEMP%\snakenet_sources.txt" (
-  for /f "delims=" %%f in ('dir /s /b src\main\java\*.java 2^>nul') do (
+echo   JDK !MAJOR! найден.
+echo.
+echo   [1/4] Компилирую движок NetCore...
+if exist "out\engine" rmdir /s /q "out\engine"
+mkdir "out\engine" 2>nul
+> "%TEMP%\netcore_sources.txt" (
+  for /f "delims=" %%f in ('dir /s /b engine\src\main\java\*.java 2^>nul') do (
     set "F=%%f"
     echo "!F:\=/!"
   )
 )
+"%JDK%javac.exe" -encoding UTF-8 -d "out\engine" @"%TEMP%\netcore_sources.txt"
+if errorlevel 1 goto :fail
 
-"%JDK%javac.exe" -encoding UTF-8 -d "out\classes" @"%TEMP%\snakenet_sources.txt"
-if errorlevel 1 (
-  echo.
-  echo   Ошибка компиляции.
-  pause
-  exit /b 1
+echo   [2/4] Компилирую змейку...
+if exist "out\game" rmdir /s /q "out\game"
+mkdir "out\game" 2>nul
+> "%TEMP%\snake_sources.txt" (
+  for /f "delims=" %%f in ('dir /s /b game\src\main\java\*.java 2^>nul') do (
+    set "F=%%f"
+    echo "!F:\=/!"
+  )
 )
+"%JDK%javac.exe" -encoding UTF-8 -cp "out\engine" -d "out\game" @"%TEMP%\snake_sources.txt"
+if errorlevel 1 goto :fail
 
-"%JDK%jar.exe" --create --file "SnakeNET.jar" --main-class snakenet.Main -C "out\classes" .
-if errorlevel 1 (
-  echo.
-  echo   Не удалось собрать SnakeNET.jar
-  pause
-  exit /b 1
-)
+echo   [3/4] Собираю NetCore.jar...
+del /q "NetCore.jar" 2>nul
+"%JDK%jar.exe" --create --file "NetCore.jar" -C "out\engine" .
+if errorlevel 1 goto :fail
+
+echo   [4/4] Собираю SnakeNET.jar...
+del /q "SnakeNET.jar" 2>nul
+"%JDK%jar.exe" --create --file "SnakeNET.jar" --manifest "manifest.txt" -C "out\game" .
+if errorlevel 1 goto :fail
 
 echo.
-echo   Готово: SnakeNET.jar
-echo   Теперь запускай run.bat
+echo   Готово: NetCore.jar (движок) + SnakeNET.jar (игра)
+echo   Запуск: run.bat
 echo.
 pause
 exit /b 0
+
+:fail
+echo.
+echo   Сборка не удалась.
+pause
+exit /b 1
 
 :check
 if not exist "%~1" exit /b 0

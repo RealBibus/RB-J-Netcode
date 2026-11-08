@@ -7,7 +7,15 @@ cd /d "%~dp0"
 if not exist "SnakeNET.jar" (
   echo.
   echo   SnakeNET.jar не найден.
-  echo   Сначала запусти build.bat - он соберёт игру из исходников.
+  echo   Сначала запусти build.bat - он соберёт движок и игру.
+  echo.
+  pause
+  exit /b 1
+)
+if not exist "NetCore.jar" (
+  echo.
+  echo   NetCore.jar не найден - это сетевой движок, без него игра не запустится.
+  echo   Запусти build.bat.
   echo.
   pause
   exit /b 1
@@ -49,9 +57,9 @@ if not defined JAVA (
 echo   Запускаю на Java !JAVA_VER! ...
 set "JAVAW=%JAVA:java.exe=javaw.exe%"
 if exist "%JAVAW%" (
-  start "" "%JAVAW%" -jar "SnakeNET.jar" %*
+  start "" "%JAVAW%" -cp "SnakeNET.jar;NetCore.jar" snakenet.Main %*
 ) else (
-  start "" "%JAVA%" -jar "SnakeNET.jar" %*
+  start "" "%JAVA%" -cp "SnakeNET.jar;NetCore.jar" snakenet.Main %*
 )
 exit /b 0
 
