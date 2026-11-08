@@ -124,6 +124,13 @@ public final class GameScreen extends Screen {
 
     private double snapshotIntervalMs = 50;
     private long lastSnapRecv;
+
+    // часы воспроизведения чужих змеек
+    private long renderServerNanos;
+    private boolean renderClockInit;
+    private double interpDelayMs = 66;
+    private double snapshotGapMs = 33;
+    private long lastSnapSt;
     private int lastReconTotal;
     private double lastReconPeak = 4;
 
@@ -349,6 +356,10 @@ public final class GameScreen extends Screen {
         correctionFlash = 0;
         snapshotIntervalMs = 1000.0 / Math.min(cfg.tickRate, 30);
         lastSnapRecv = 0;
+        renderClockInit = false;
+        interpDelayMs = 66;
+        snapshotGapMs = 1000.0 / Math.min(cfg.tickRate, 30);
+        lastSnapSt = 0;
         serverClock.onSnapshot(0, 0, cfg.tickRate, System.nanoTime());
         bAgain.visible = false;
         bLobby.visible = false;
@@ -369,6 +380,12 @@ public final class GameScreen extends Screen {
             if (dt > 5 && dt < 400) snapshotIntervalMs = snapshotIntervalMs * 0.8 + dt * 0.2;
         }
         lastSnapRecv = now;
+        if (lastSnapSt != 0) {
+            double gap = (snap.serverNanos - lastSnapSt) / 1_000_000.0;
+            if (gap > 3 && gap < 250) snapshotGapMs = snapshotGapMs * 0.85 + gap * 0.15;
+            interpDelayMs = Math.max(40, Math.min(220, snapshotGapMs * 1.6 + 12));
+        }
+        lastSnapSt = snap.serverNanos;
         prev = cur;
         cur = snap;
         snapHistory.addLast(snap);
@@ -518,6 +535,24 @@ public final class GameScreen extends Screen {
                 continue;
             }
             f.y -= dt * 1.2;
+        }
+
+        // часы воспроизведения чужих: идём по локальному времени и мягко подтягиваемся
+        if (cur != null) {
+            long nowNanos = serverNanosNow();
+            long target = nowNanos - (long) (interpDelayMs * 1_000_000.0);
+            if (!renderClockInit) {
+                renderServerNanos = cur != null && cur.serverNanos != 0 ? cur.serverNanos : target;
+                renderClockInit = true;
+            } else {
+                renderServerNanos += (long) (Math.min(0.1, dt) * 1_000_000_000.0);
+                long diff = target - renderServerNanos;
+                if (Math.abs(diff) > 500_000_000L) {
+                    renderServerNanos = target;
+                } else {
+                    renderServerNanos += (long) (diff * Math.min(1, dt * 4));
+                }
+            }
         }
 
         correctionFlash = Math.max(0, correctionFlash - dt * 2.2);
@@ -731,39 +766,73 @@ public final class GameScreen extends Screen {
      * непрерывные позиции между соседними снимками — так нет ни замираний,
      * ни прыжков на границе клетки.
      */
+    /**
+     * Чужие змейки: часы воспроизведения.
+     *
+     * <p>Время рендера идёт по локальным часам и только мягко подтягивается
+     * к «сервер сейчас минус задержка». Раньше оно каждый кадр пересчитывалось
+     * заново от оценки серверных часов — любая дрожь оценки давала рывок
+     * картинки у всех чужих змеек.</p>
+     */
     private double[] remotePoints(int snakeId) {
         if (snapHistory.isEmpty()) return null;
-        long now = serverNanosNow();
-        long delay = (long) (Math.max(2 * snapshotIntervalMs, 45) * 1_000_000.0);
-        long target = now - delay;
+        Snapshot first = snapHistory.peekFirst();
+        Snapshot last = snapHistory.peekLast();
+        if (snapHistory.size() == 1) return viewPoints(first, snakeId);
 
         Snapshot before = null;
         Snapshot after = null;
-        for (Snapshot snap : snapHistory) {
-            if (snap.serverNanos <= target) before = snap;
+        for (Snapshot s : snapHistory) {
+            if (s.serverNanos <= renderServerNanos) before = s;
             else {
-                after = snap;
+                after = s;
                 break;
             }
         }
-        if (before == null) before = snapHistory.peekFirst();
-        if (after == null) after = snapHistory.peekLast();
-        if (before == null || after == null) return null;
 
-        Snapshot.SnakeView a = before.snake(snakeId);
-        Snapshot.SnakeView b = after.snake(snakeId);
-        if (a == null) a = b;
-        if (b == null) b = a;
-        if (a == null) return null;
+        if (before == null) return viewPoints(first, snakeId);
 
-        double[] pa = SnakeRenderMath.points(a.xs, a.ys, a.dir, a.acc, 0);
-        double[] pb = SnakeRenderMath.points(b.xs, b.ys, b.dir, b.acc, 0);
-        if (a == b || after.serverNanos <= before.serverNanos) return pb;
-        double phase = (target - before.serverNanos) / (double) (after.serverNanos - before.serverNanos);
-        phase = Math.max(0, Math.min(1, phase));
-        return SnakeRenderMath.blend(pa, pb, phase);
+        if (after == null) {
+            // буфер кончился (пакет опоздал) — экстраполируем вперёд, а не замираем
+            Snapshot prev = secondLastSnapshot();
+            if (prev == null || last.serverNanos <= prev.serverNanos) return viewPoints(last, snakeId);
+            double phase = (renderServerNanos - last.serverNanos)
+                    / (double) (last.serverNanos - prev.serverNanos);
+            return blendViews(prev, last, snakeId, Math.max(0, Math.min(1.5, phase)));
+        }
+
+        double span = after.serverNanos - before.serverNanos;
+        if (span <= 0) return viewPoints(after, snakeId);
+        double phase = (renderServerNanos - before.serverNanos) / span;
+        return blendViews(before, after, snakeId, Math.max(0, Math.min(1, phase)));
     }
 
+    private Snapshot secondLastSnapshot() {
+        Snapshot last = null;
+        Snapshot prev = null;
+        for (Snapshot s : snapHistory) {
+            prev = last;
+            last = s;
+        }
+        return prev;
+    }
+
+    private double[] viewPoints(Snapshot snap, int snakeId) {
+        Snapshot.SnakeView v = snap.snake(snakeId);
+        if (v == null || v.length() == 0) return null;
+        return SnakeRenderMath.points(v.xs, v.ys, v.dir, v.acc, 0);
+    }
+
+    private double[] blendViews(Snapshot a, Snapshot b, int snakeId, double phase) {
+        Snapshot.SnakeView va = a.snake(snakeId);
+        Snapshot.SnakeView vb = b.snake(snakeId);
+        if (va == null) va = vb;
+        if (vb == null) vb = va;
+        if (va == null) return null;
+        double[] pa = SnakeRenderMath.points(va.xs, va.ys, va.dir, va.acc, 0);
+        double[] pb = SnakeRenderMath.points(vb.xs, vb.ys, vb.dir, vb.acc, 0);
+        return SnakeRenderMath.blend(pa, pb, phase);
+    }
     private void paintSnakes(Graphics2D g) {
         List<Snapshot.SnakeView> list = new ArrayList<>(cur.snakes);
         list.sort((x, y) -> Boolean.compare(x.alive, y.alive));
@@ -971,7 +1040,8 @@ public final class GameScreen extends Screen {
                 + "   FPS " + win.fps();
         Brush.text(g, stats, 1016, 640, Theme.font(10), Theme.DIM);
         int recon = corrections + snaps;
-        Brush.text(g, "RECON " + recon + "   SNAP " + snaps, 1016, 658, Theme.font(10),
+        Brush.text(g, "RECON " + recon + "  SNAP " + snaps + "  INT " + Math.round(interpDelayMs) + "ms",
+                1016, 658, Theme.font(10),
                 recon > 0 ? Theme.YELLOW : Theme.MUTED);
 
         gRtt.paint(g, 1016, 668, 192, 32, Theme.ACCENT2, 120);
