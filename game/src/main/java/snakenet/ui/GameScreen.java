@@ -495,26 +495,22 @@ public final class GameScreen extends Screen {
     }
 
     private void paintBoard(Graphics2D g) {
-        Shape outer = Brush.round(boardX - 12, boardY - 12, boardW + 24, boardH + 24, 22);
-        Brush.glow(g, outer, new Color(0x3D, 0xDC, 0xFF), 4, 12);
-        g.setColor(new Color(0x07, 0x0C, 0x15, 255));
+        Shape outer = Brush.round(boardX - 14, boardY - 14, boardW + 28, boardH + 28, 14);
+        g.setColor(new Color(0, 0, 0, 110));
+        g.fill(Brush.round(boardX - 10, boardY - 9, boardW + 28, boardH + 28, 14));
+        g.setColor(new Color(0x0A, 0x0D, 0x12));
         g.fill(outer);
-        g.setColor(new Color(0x17, 0x27, 0x3E));
-        g.setStroke(new BasicStroke(1.4f));
+        g.setColor(Theme.LINE);
+        g.setStroke(new BasicStroke(2.6f));
         g.draw(outer);
 
-        g.setColor(new Color(255, 255, 255, 7));
-        g.setStroke(new BasicStroke(1f));
+        // точки на пересечениях клеток вместо линий
+        g.setColor(new Color(255, 255, 255, 12));
         for (int x = 1; x < cols; x++) {
-            double px = boardX + x * cell;
-            g.draw(new Line2D.Double(px, boardY, px, boardY + boardH));
+            for (int y = 1; y < rows; y++) {
+                g.fill(new Ellipse2D.Double(boardX + x * cell - 1.1, boardY + y * cell - 1.1, 2.2, 2.2));
+            }
         }
-        for (int y = 1; y < rows; y++) {
-            double py = boardY + y * cell;
-            g.draw(new Line2D.Double(boardX, py, boardX + boardW, py));
-        }
-        g.setColor(new Color(0x1C, 0x2E, 0x47));
-        g.draw(new Rectangle2D.Double(boardX, boardY, boardW, boardH));
 
         if (cur == null) {
             Brush.centered(g, "Ждём старт…", boardX + boardW / 2, boardY + boardH / 2, Theme.font(18), Theme.MUTED);
@@ -531,9 +527,9 @@ public final class GameScreen extends Screen {
             case 1:
                 return Theme.MAGENTA;
             case 2:
-                return new Color(0xFF, 0x8A, 0x4C);
+                return new Color(0xE6, 0x83, 0x6B);
             case 3:
-                return new Color(0xA7, 0x8B, 0xFA);
+                return new Color(0xA4, 0x8B, 0xD4);
             default:
                 return Theme.YELLOW;
         }
@@ -543,20 +539,24 @@ public final class GameScreen extends Screen {
         for (Snapshot.FoodView f : cur.food) {
             double cx = boardX + (f.x + 0.5) * cell;
             double cy = boardY + (f.y + 0.5) * cell;
-            double pulse = 1 + 0.13 * Math.sin(time * 4 + f.x * 1.7 + f.y * 0.9);
+            double pulse = 1 + 0.06 * Math.sin(time * 3 + f.x * 1.7 + f.y * 0.9);
             Color c = foodColor(f.kind);
-            double halo = cell * 0.66 * pulse;
-            g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), 46));
-            g.fill(new Ellipse2D.Double(cx - halo, cy - halo, halo * 2, halo * 2));
-            g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), 90));
-            double mid = cell * 0.38 * pulse;
-            g.fill(new Ellipse2D.Double(cx - mid, cy - mid, mid * 2, mid * 2));
-            double r = cell * 0.27 * pulse;
+            double r = cell * 0.26 * pulse;
+
+            g.setColor(new Color(0, 0, 0, 90));
+            g.fill(new Ellipse2D.Double(cx - r + 1.5, cy - r + 2.5, r * 2, r * 2));
             g.setColor(c);
             g.fill(new Ellipse2D.Double(cx - r, cy - r, r * 2, r * 2));
-            g.setColor(new Color(255, 255, 255, 220));
-            double core = r * 0.45;
-            g.fill(new Ellipse2D.Double(cx - core * 0.4, cy - core * 0.7, core, core));
+            g.setColor(Theme.alpha(Theme.shade(c, -0.4), 190));
+            g.setStroke(new BasicStroke(1.4f));
+            g.draw(new Ellipse2D.Double(cx - r, cy - r, r * 2, r * 2));
+            g.setColor(new Color(255, 255, 255, 170));
+            double hl = r * 0.55;
+            g.fill(new Ellipse2D.Double(cx - r * 0.45, cy - r * 0.55, hl, hl));
+            // хвостик
+            g.setColor(Theme.shade(c, 0.25));
+            g.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.draw(new Line2D.Double(cx + r * 0.25, cy - r * 0.85, cx + r * 0.55, cy - r * 1.25));
         }
     }
 
@@ -642,58 +642,61 @@ public final class GameScreen extends Screen {
                 py[i] = boardY + (pts[i * 2 + 1] + 0.5) * cell;
             }
 
-            int glowAlpha = s.alive ? 40 : 10;
-            g.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), glowAlpha));
-            g.setStroke(new BasicStroke((float) (cell * 1.02), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            for (int i = 1; i < n; i++) {
-                if (Math.abs(pts[i * 2] - pts[(i - 1) * 2]) > 1.5 || Math.abs(pts[i * 2 + 1] - pts[(i - 1) * 2 + 1]) > 1.5) continue;
-                g.draw(new Line2D.Double(px[i - 1], py[i - 1], px[i], py[i]));
+            // тело: хвост -> голова, каждый сегмент — скруглённый квадратик
+            for (int i = n - 1; i >= 0; i--) {
+                double size = cell * (i == 0 ? 1.0 : 0.94);
+                double rr = size * 0.30;
+                Color c;
+                if (!s.alive) c = Theme.mix(base, Theme.BG, 0.45f);
+                else if (i == 0) c = Theme.shade(base, 0.10);
+                else c = (i % 2 == 0) ? base : Theme.shade(base, -0.13);
+
+                g.setColor(new Color(0, 0, 0, s.alive ? 80 : 28));
+                g.fill(Brush.round(px[i] - size / 2 + 1.5, py[i] - size / 2 + 2.5, size, size, rr));
+                g.setColor(c);
+                g.fill(Brush.round(px[i] - size / 2, py[i] - size / 2, size, size, rr));
+                g.setColor(Theme.alpha(Theme.shade(c, -0.45), s.alive ? 150 : 70));
+                g.setStroke(new BasicStroke(1.3f));
+                g.draw(Brush.round(px[i] - size / 2, py[i] - size / 2, size, size, rr));
             }
 
-            g.setColor(color);
-            g.setStroke(new BasicStroke((float) (cell * 0.70), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            for (int i = 1; i < n; i++) {
-                if (Math.abs(pts[i * 2] - pts[(i - 1) * 2]) > 1.5 || Math.abs(pts[i * 2 + 1] - pts[(i - 1) * 2 + 1]) > 1.5) continue;
-                g.draw(new Line2D.Double(px[i - 1], py[i - 1], px[i], py[i]));
-            }
-
-            g.setColor(new Color(
-                    Math.min(255, color.getRed() + 70),
-                    Math.min(255, color.getGreen() + 70),
-                    Math.min(255, color.getBlue() + 70),
-                    s.alive ? 110 : 30));
-            g.setStroke(new BasicStroke((float) (cell * 0.24), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            for (int i = 1; i < n; i++) {
-                if (Math.abs(pts[i * 2] - pts[(i - 1) * 2]) > 1.5 || Math.abs(pts[i * 2 + 1] - pts[(i - 1) * 2 + 1]) > 1.5) continue;
-                g.draw(new Line2D.Double(px[i - 1], py[i - 1], px[i], py[i]));
-            }
-
-            // голова
             double hx = px[0];
             double hy = py[0];
-            double hr = cell * 0.40;
-            g.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), s.alive ? 90 : 24));
-            g.fill(new Ellipse2D.Double(hx - hr * 1.35, hy - hr * 1.35, hr * 2.7, hr * 2.7));
-            g.setColor(color);
-            g.fill(new Ellipse2D.Double(hx - hr, hy - hr, hr * 2, hr * 2));
-
             if (s.alive) {
-                double dx = snakenet.game.SnakeState.DX[s.dir];
-                double dy = snakenet.game.SnakeState.DY[s.dir];
-                double eyeX = hx + dx * cell * 0.10;
-                double eyeY = hy + dy * cell * 0.10;
-                double perpX = -dy * cell * 0.16;
-                double perpY = dx * cell * 0.16;
-                double er = Math.max(1.6, cell * 0.085);
-                g.setColor(new Color(0x05, 0x10, 0x0C));
+                double size = cell * 1.0;
+                g.setColor(new Color(255, 255, 255, 38));
+                g.fill(Brush.round(hx - size * 0.36, hy - size * 0.40, size * 0.58, size * 0.30, size * 0.15));
+
+                int dxs = SnakeState.DX[s.dir];
+                int dys = SnakeState.DY[s.dir];
+                double eyeX = hx + dxs * cell * 0.12;
+                double eyeY = hy + dys * cell * 0.12;
+                double perpX = -dys * cell * 0.17;
+                double perpY = dxs * cell * 0.17;
+                double er = Math.max(1.7, cell * 0.09);
+                g.setColor(new Color(0x12, 0x0E, 0x0A));
                 g.fill(new Ellipse2D.Double(eyeX + perpX - er, eyeY + perpY - er, er * 2, er * 2));
                 g.fill(new Ellipse2D.Double(eyeX - perpX - er, eyeY - perpY - er, er * 2, er * 2));
-                g.setColor(new Color(255, 255, 255, 210));
-                double tr = er * 0.45;
-                g.fill(new Ellipse2D.Double(eyeX + perpX - tr - 0.6, eyeY + perpY - tr - 0.6, tr * 2, tr * 2));
-                g.fill(new Ellipse2D.Double(eyeX - perpX - tr - 0.6, eyeY - perpY - tr - 0.6, tr * 2, tr * 2));
-            }
+                g.setColor(new Color(255, 255, 255, 220));
+                double tr = er * 0.42;
+                g.fill(new Ellipse2D.Double(eyeX + perpX - tr - 0.5, eyeY + perpY - tr - 0.5, tr * 2, tr * 2));
+                g.fill(new Ellipse2D.Double(eyeX - perpX - tr - 0.5, eyeY - perpY - tr - 0.5, tr * 2, tr * 2));
 
+                // язык: высовывается рывками
+                if (Math.sin(time * 5 + s.id * 1.7) > 0.55) {
+                    double bx = hx + dxs * cell * 0.44;
+                    double by = hy + dys * cell * 0.44;
+                    double ex = bx + dxs * cell * 0.24;
+                    double ey = by + dys * cell * 0.24;
+                    g.setColor(new Color(0xD9, 0x5B, 0x66));
+                    g.setStroke(new BasicStroke(1.9f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g.draw(new Line2D.Double(bx, by, ex, ey));
+                    double fx = -dys * cell * 0.09;
+                    double fy = dxs * cell * 0.09;
+                    g.draw(new Line2D.Double(ex, ey, ex + dxs * cell * 0.09 + fx, ey + dys * cell * 0.09 + fy));
+                    g.draw(new Line2D.Double(ex, ey, ex + dxs * cell * 0.09 - fx, ey + dys * cell * 0.09 - fy));
+                }
+            }
             // подпись своего ника над головой
             if (s.id == app.myId()) {
                 Brush.text(g, "ты", hx + cell * 0.5, hy - cell * 0.55, Theme.semibold(10), Theme.alpha(Theme.ACCENT, 200));
@@ -764,7 +767,7 @@ public final class GameScreen extends Screen {
             Brush.text(g, label, 1052, y + 20, Theme.semibold(14), s.alive ? Theme.TEXT : Theme.MUTED);
             Brush.right(g, String.valueOf(s.score), 1206, y + 20, Theme.semibold(15), Theme.ACCENT);
 
-            g.setColor(new Color(0x1B, 0x2A, 0x40));
+            g.setColor(new Color(0x2E, 0x38, 0x46));
             g.fill(new RoundRectangle2D.Double(1052, y + 28, 154, 4, 4, 4));
             g.setColor(Theme.alpha(c, s.alive ? 220 : 90));
             g.fill(new RoundRectangle2D.Double(1052, y + 28, 154 * (s.score / (double) max), 4, 4, 4));
@@ -810,10 +813,8 @@ public final class GameScreen extends Screen {
             double k = goFlash;
             double cx = boardX + boardW / 2;
             double cy = boardY + boardH * 0.30;
-            g.setColor(new Color(0x05, 0x12, 0x0C, (int) (170 * k)));
-            g.fill(new RoundRectangle2D.Double(cx - 150, cy - 38, 300, 54, 27, 27));
-            Brush.glowText(g, "ПОЕХАЛИ!", cx, cy + 4,
-                    Theme.display((float) (26 + k * 5)), Theme.alpha(Theme.ACCENT, (int) (255 * k)), Theme.ACCENT, 4);
+            Brush.centered(g, "ПОЕХАЛИ!", cx, cy, Theme.display((float) (28 + k * 6)),
+                    Theme.alpha(Theme.ACCENT, (int) (255 * k)));
         }
 
         // «ты выбыл»

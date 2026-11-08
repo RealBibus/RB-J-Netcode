@@ -225,12 +225,12 @@ public final class LobbyScreen extends Screen {
             if (i < players.size()) {
                 paintRosterRow(g, players.get(i), y);
             } else {
-                g.setColor(new Color(0x14, 0x20, 0x33, 120));
+                g.setColor(new Color(0x1B, 0x22, 0x2C, 120));
                 g.fill(new RoundRectangle2D.Double(76, y, 720, 44, 14, 14));
-                g.setColor(new Color(0x22, 0x33, 0x4C, 150));
+                g.setColor(new Color(0x2E, 0x38, 0x46, 150));
                 g.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 1f, new float[]{5, 6}, 0));
                 g.draw(new RoundRectangle2D.Double(76.5, y + 0.5, 719, 43, 14, 14));
-                Brush.text(g, "Свободное место", 100, y + 27, Theme.font(14), new Color(0x44, 0x58, 0x74));
+                Brush.text(g, "Свободное место", 100, y + 27, Theme.font(14), new Color(0x5C, 0x66, 0x72));
             }
         }
 
@@ -240,9 +240,9 @@ public final class LobbyScreen extends Screen {
     private void paintAddress(Graphics2D g) {
         String addr = app.gameAddress();
         if (addr == null || addr.isBlank()) addr = "—";
-        g.setColor(new Color(0x0D, 0x18, 0x29, 230));
+        g.setColor(new Color(0x1B, 0x22, 0x2C, 230));
         g.fill(new RoundRectangle2D.Double(900, 92, 324, 46, 23, 23));
-        g.setColor(new Color(0x24, 0x38, 0x55));
+        g.setColor(new Color(0x3A, 0x44, 0x52));
         g.setStroke(new BasicStroke(1.1f));
         g.draw(new RoundRectangle2D.Double(900, 92, 324, 46, 23, 23));
         Brush.text(g, "АДРЕС ДЛЯ ДРУЗЕЙ", 918, 112, Theme.semibold(9), Theme.MUTED);
@@ -252,7 +252,7 @@ public final class LobbyScreen extends Screen {
 
     private void paintRosterRow(Graphics2D g, Roster r, double y) {
         boolean self = r.id == app.myId();
-        g.setColor(new Color(0x11, 0x1D, 0x30, self ? 245 : 225));
+        g.setColor(new Color(0x24, 0x2C, 0x38, self ? 245 : 225));
         g.fill(new RoundRectangle2D.Double(76, y, 720, 44, 14, 14));
         g.setColor(self ? Theme.alpha(Theme.ACCENT, 90) : new Color(0x24, 0x36, 0x50));
         g.setStroke(new BasicStroke(1.1f));

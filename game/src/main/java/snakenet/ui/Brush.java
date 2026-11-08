@@ -10,7 +10,7 @@ import java.awt.Paint;
 import java.awt.Shape;
 import java.awt.geom.RoundRectangle2D;
 
-/** Помощники рисования: панели, свечение, текст. */
+/** Помощники рисования: панели, кнопки, текст. */
 public final class Brush {
 
     private Brush() {
@@ -32,25 +32,21 @@ public final class Brush {
         g.draw(s);
     }
 
-    /** Панель с мягким градиентом, рамкой и бликом сверху. */
+    /** Панель: плотная заливка, тонкая рамка и жёсткая тень — как наклейка. */
     public static void panel(Graphics2D g, double x, double y, double w, double h, double r) {
-        Shape s = round(x, y, w, h, r);
-        g.setPaint(new GradientPaint(
-                (float) x, (float) y, new Color(0x16, 0x23, 0x3A, 232),
-                (float) x, (float) (y + h), new Color(0x0D, 0x16, 0x26, 224)));
-        g.fill(s);
-        border(g, s, new Color(0x25, 0x38, 0x55, 180), 1.2f);
-        // тонкий блик по верхней кромке
-        g.setColor(new Color(255, 255, 255, 16));
-        g.setStroke(new BasicStroke(1.1f));
-        g.draw(new RoundRectangle2D.Double(x + 1, y + 1, w - 2, h - 2, Math.min(r, h / 2) * 2 - 2, Math.min(r, h / 2) * 2 - 2));
+        double rr = Math.min(r, 18);
+        g.setColor(new Color(0, 0, 0, 90));
+        g.fill(round(x + 4, y + 5, w, h, rr));
+        g.setColor(Theme.PANEL);
+        g.fill(round(x, y, w, h, rr));
+        border(g, round(x + 0.5, y + 0.5, w - 1, h - 1, rr), Theme.LINE, 1.4f);
     }
 
-    /** Мягкое свечение вокруг фигуры (несколько полупрозрачных обводок). */
+    /** Мягкое свечение — теперь почти не используется, оставлено для акцентов. */
     public static void glow(Graphics2D g, Shape s, Color c, int layers, double spread) {
         for (int i = layers; i >= 1; i--) {
             float t = i / (float) layers;
-            g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), (int) (26 * (1 - t) + 10)));
+            g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), (int) (16 * (1 - t) + 6)));
             g.setStroke(new BasicStroke((float) (spread * t * 2 + 1), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             g.draw(s);
         }
@@ -76,22 +72,17 @@ public final class Brush {
         g.drawString(s, (float) (rx - fm.stringWidth(s)), (float) baseline);
     }
 
-    /** Неоновый текст: несколько смещённых копий + яркое ядро. */
-    public static void glowText(Graphics2D g, String s, double cx, double baseline, Font f, Color core, Color halo, int strength) {
+    /** Текст с лёгкой тенью — читается на любом фоне. */
+    public static void shadowText(Graphics2D g, String s, double x, double baseline, Font f, Color c, Color shadow) {
         g.setFont(f);
-        FontMetrics fm = g.getFontMetrics();
-        double x = cx - fm.stringWidth(s) / 2.0;
-        for (int layer = strength; layer >= 1; layer--) {
-            int a = Math.max(8, 34 / layer);
-            g.setColor(new Color(halo.getRed(), halo.getGreen(), halo.getBlue(), a));
-            double off = layer * 1.1;
-            g.drawString(s, (float) (x - off), (float) baseline);
-            g.drawString(s, (float) (x + off), (float) baseline);
-            g.drawString(s, (float) x, (float) (baseline - off));
-            g.drawString(s, (float) x, (float) (baseline + off));
-        }
-        g.setColor(core);
+        g.setColor(shadow);
+        g.drawString(s, (float) (x + 2), (float) (baseline + 2));
+        g.setColor(c);
         g.drawString(s, (float) x, (float) baseline);
+    }
+
+    public static void glowText(Graphics2D g, String s, double cx, double baseline, Font f, Color core, Color halo, int strength) {
+        centered(g, s, cx, baseline, f, core);
     }
 
     public static void gradientText(Graphics2D g, String s, double x, double baseline, Font f, Color a, Color b) {

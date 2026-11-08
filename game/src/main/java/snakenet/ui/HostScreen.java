@@ -163,7 +163,7 @@ public final class HostScreen extends Screen {
             g.fill(new Ellipse2D.Double(cx - 14, cy - 14, 28, 28));
         }
 
-        Brush.divider(g, 620, 226, 620, 606, new Color(0x20, 0x31, 0x4C, 190));
+        Brush.divider(g, 620, 226, 620, 606, new Color(0x2E, 0x38, 0x46, 190));
 
         // правая колонка
         Brush.text(g, "РАЗМЕР ПОЛЯ", 660, 244, Theme.semibold(11), Theme.MUTED);
@@ -177,9 +177,9 @@ public final class HostScreen extends Screen {
                 1000, 244, Theme.font(13), Theme.MUTED);
 
         // карточка адреса
-        g.setColor(new Color(0x0C, 0x16, 0x26, 235));
+        g.setColor(new Color(0x1B, 0x22, 0x2C, 235));
         g.fill(new RoundRectangle2D.Double(660, 548, 470, 74, 16, 16));
-        g.setColor(new Color(0x25, 0x38, 0x55));
+        g.setColor(new Color(0x3A, 0x44, 0x52));
         g.setStroke(new BasicStroke(1f));
         g.draw(new RoundRectangle2D.Double(660, 548, 470, 74, 16, 16));
         Brush.text(g, "ДРУЗЬЯМ НУЖНО ВВЕСТИ", 682, 574, Theme.semibold(10), Theme.MUTED);

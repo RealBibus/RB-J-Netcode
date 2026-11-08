@@ -173,9 +173,9 @@ public final class JoinScreen extends Screen {
         if (list.isEmpty()) {
             double cx = 406;
             double cy = 400;
-            g.setColor(new Color(0x18, 0x27, 0x3C));
+            g.setColor(new Color(0x2E, 0x38, 0x46));
             g.fill(new Ellipse2D.Double(cx - 34, cy - 34, 68, 68));
-            g.setColor(new Color(0x2C, 0x44, 0x64));
+            g.setColor(new Color(0x3A, 0x44, 0x52));
             g.setStroke(new BasicStroke(2f));
             g.draw(new Ellipse2D.Double(cx - 34, cy - 34, 68, 68));
             Brush.centered(g, "…", cx, cy + 10, Theme.display(30), Theme.MUTED);
@@ -189,9 +189,9 @@ public final class JoinScreen extends Screen {
                 LanDiscovery.Found f = list.get(i);
                 double y = rowY(i);
                 boolean hot = mouseX >= 86 && mouseX <= 726 && mouseY >= y && mouseY <= y + 66;
-                g.setColor(hot ? new Color(0x1B, 0x2E, 0x49, 245) : new Color(0x12, 0x1E, 0x31, 235));
+                g.setColor(hot ? new Color(0x2E, 0x38, 0x46, 245) : new Color(0x24, 0x2C, 0x38, 235));
                 g.fill(new RoundRectangle2D.Double(86, y, 640, 66, 16, 16));
-                g.setColor(hot ? Theme.alpha(Theme.ACCENT, 170) : new Color(0x25, 0x38, 0x55));
+                g.setColor(hot ? Theme.alpha(Theme.ACCENT, 170) : new Color(0x3A, 0x44, 0x52));
                 g.setStroke(new BasicStroke(1.2f));
                 g.draw(new RoundRectangle2D.Double(86, y, 640, 66, 16, 16));
 

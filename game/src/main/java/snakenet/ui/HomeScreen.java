@@ -71,17 +71,8 @@ public final class HomeScreen extends Screen {
     @Override
     protected void paintScreen(Graphics2D g) {
         paintTag(g, 96, 128, "ЛОКАЛЬНАЯ СЕТЬ · ДО 8 ИГРОКОВ");
-        Brush.gradientText(g, "SNAKE", 92, 300, Theme.display(116), Color.WHITE, new Color(0x8F, 0xFF, 0xCB));
-        // NET с неоновым свечением
-        for (int i = 4; i >= 1; i--) {
-            g.setColor(new Color(0x4C, 0xFF, 0x9B, 18));
-            g.setFont(Theme.display(116));
-            g.drawString("NET", 92 - i * 2f, 416);
-            g.drawString("NET", 92 + i * 2f, 416);
-            g.drawString("NET", 92, 416 - i * 2f);
-            g.drawString("NET", 92, 416 + i * 2f);
-        }
-        Brush.text(g, "NET", 92, 416, Theme.display(116), Theme.ACCENT);
+        Brush.gradientText(g, "SNAKE", 92, 300, Theme.display(116), Theme.TEXT, new Color(0xE8, 0xB4, 0x5C));
+        Brush.shadowText(g, "NET", 92, 416, Theme.display(116), Theme.ACCENT, new Color(0x2A, 0x1E, 0x12));
 
         Brush.wrapped(g, "Змейка для своих: один создаёт игру, остальные заходят по адресу в той же сети.",
                 100, 470, 450, Theme.font(18), Theme.DIM, 26);
@@ -94,9 +85,9 @@ public final class HomeScreen extends Screen {
     private void paintTag(Graphics2D g, double x, double y, String text) {
         g.setFont(Theme.semibold(12));
         int w = g.getFontMetrics().stringWidth(text) + 28;
-        g.setColor(new Color(0x12, 0x22, 0x38, 220));
+        g.setColor(new Color(0x1B, 0x22, 0x2C, 220));
         g.fill(new RoundRectangle2D.Double(x, y - 20, w, 30, 30, 30));
-        g.setColor(new Color(0x2A, 0x40, 0x60));
+        g.setColor(new Color(0x3A, 0x44, 0x52));
         g.setStroke(new BasicStroke(1f));
         g.draw(new RoundRectangle2D.Double(x, y - 20, w, 30, 30, 30));
         g.setColor(Theme.ACCENT);
@@ -115,7 +106,7 @@ public final class HomeScreen extends Screen {
         double bw = w - 60;
         double bh = h - 130;
 
-        g.setColor(new Color(0x08, 0x0E, 0x18, 235));
+        g.setColor(new Color(0x0A, 0x0D, 0x12, 235));
         g.fill(new RoundRectangle2D.Double(bx, by, bw, bh, 18, 18));
         g.setColor(new Color(255, 255, 255, 9));
         g.setStroke(new BasicStroke(1f));
@@ -150,43 +141,54 @@ public final class HomeScreen extends Screen {
             xs[i] = bx + bw / 2 + Math.sin(tt * 1.05) * bw * 0.30 + Math.sin(tt * 0.47 + 1.1) * bw * 0.10;
             ys[i] = by + bh / 2 + Math.cos(tt * 0.83) * bh * 0.30 + Math.cos(tt * 0.41) * bh * 0.10;
         }
-        // мягкое свечение под телом
-        Path2D path = new Path2D.Double();
-        path.moveTo(xs[0], ys[0]);
-        for (int i = 1; i < n; i++) path.lineTo(xs[i], ys[i]);
-        g.setColor(new Color(0x4C, 0xFF, 0x9B, 28));
-        g.setStroke(new BasicStroke(32f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        g.draw(path);
-
-        for (int i = n - 1; i > 0; i--) {
-            float t = i / (float) n;
-            Color c = Theme.mix(Theme.ACCENT, Theme.ACCENT2, t);
+        // тело: сегменты от хвоста к голове
+        for (int i = n - 1; i >= 0; i--) {
+            float k = i / (float) n;
+            Color c = Theme.mix(Theme.ACCENT, Theme.ACCENT2, k);
+            double size = (i == 0 ? 30 : 26 - i * 0.35);
+            double rr = size * 0.30;
+            g.setColor(new Color(0, 0, 0, 90));
+            g.fill(Brush.round(xs[i] - size / 2 + 1.5, ys[i] - size / 2 + 2.5, size, size, rr));
             g.setColor(c);
-            g.setStroke(new BasicStroke((float) (22 - i * 0.62), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            g.draw(new Line2D.Double(xs[i], ys[i], xs[i - 1], ys[i - 1]));
+            g.fill(Brush.round(xs[i] - size / 2, ys[i] - size / 2, size, size, rr));
+            g.setColor(Theme.alpha(Theme.shade(c, -0.45), 140));
+            g.setStroke(new BasicStroke(1.2f));
+            g.draw(Brush.round(xs[i] - size / 2, ys[i] - size / 2, size, size, rr));
         }
-        // голова
+
         double hx = xs[0];
         double hy = ys[0];
-        g.setColor(new Color(0x4C, 0xFF, 0x9B, 55));
-        g.fill(new Ellipse2D.Double(hx - 22, hy - 22, 44, 44));
-        g.setColor(Theme.ACCENT);
-        g.fill(new Ellipse2D.Double(hx - 14, hy - 14, 28, 28));
-        g.setColor(new Color(0x06, 0x14, 0x0E));
         double ang = Math.atan2(ys[0] - ys[1], xs[0] - xs[1]);
-        double ex = Math.cos(ang) * 4;
-        double ey = Math.sin(ang) * 4;
-        double px = -Math.sin(ang) * 4.5;
-        double py = Math.cos(ang) * 4.5;
-        g.fill(new Ellipse2D.Double(hx + ex + px - 2.2, hy + ey + py - 2.2, 4.4, 4.4));
-        g.fill(new Ellipse2D.Double(hx + ex - px - 2.2, hy + ey - py - 2.2, 4.4, 4.4));
+        double dx = Math.cos(ang);
+        double dy = Math.sin(ang);
+        double ex = hx + dx * 4;
+        double ey = hy + dy * 4;
+        double perpX = -dy * 6;
+        double perpY = dx * 6;
+        g.setColor(new Color(0x12, 0x0E, 0x0A));
+        g.fill(new Ellipse2D.Double(ex + perpX - 2.6, ey + perpY - 2.6, 5.2, 5.2));
+        g.fill(new Ellipse2D.Double(ex - perpX - 2.6, ey - perpY - 2.6, 5.2, 5.2));
+        g.setColor(new Color(255, 255, 255, 220));
+        g.fill(new Ellipse2D.Double(ex + perpX - 1.1, ey + perpY - 1.1, 2.2, 2.2));
+        g.fill(new Ellipse2D.Double(ex - perpX - 1.1, ey - perpY - 1.1, 2.2, 2.2));
 
+        if (Math.sin(time * 5) > 0.55) {
+            double tbx = hx + dx * 15;
+            double tby = hy + dy * 15;
+            double tx = tbx + dx * 9;
+            double ty = tby + dy * 9;
+            g.setColor(new Color(0xD9, 0x5B, 0x66));
+            g.setStroke(new BasicStroke(1.9f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.draw(new Line2D.Double(tbx, tby, tx, ty));
+            g.draw(new Line2D.Double(tx, ty, tx + dx * 5 - dy * 4, ty + dy * 5 + dx * 4));
+            g.draw(new Line2D.Double(tx, ty, tx + dx * 5 + dy * 4, ty + dy * 5 - dx * 4));
+        }
         Brush.text(g, "ПРИМЕР ПАРТИИ", x + 32, y + h - 62, Theme.semibold(11), Theme.MUTED);
         Brush.text(g, "3 игрока  ·  2 бота  ·  Wi-Fi", x + 32, y + h - 34, Theme.font(16), Theme.DIM);
 
         // статус-точка
         double pulse = 0.5 + 0.5 * Math.sin(time * 3);
-        g.setColor(new Color(0x4C, 0xFF, 0x9B, (int) (90 + pulse * 120)));
+        g.setColor(new Color(0x6F, 0xC9, 0xBC, (int) (110 + pulse * 120)));
         g.fill(new Ellipse2D.Double(x + w - 44, y + h - 56, 9, 9));
     }
 
@@ -215,7 +217,7 @@ public final class HomeScreen extends Screen {
         };
         double y = 320;
         for (String[] item : items) {
-            g.setColor(new Color(0x18, 0x2A, 0x42));
+            g.setColor(new Color(0x2E, 0x38, 0x46));
             g.fill(new Ellipse2D.Double(352, y - 22, 34, 34));
             Brush.centered(g, item[0], 369, y + 1, Theme.semibold(16), Theme.ACCENT);
             Brush.text(g, item[1], 404, y - 2, Theme.semibold(18), Theme.TEXT);
