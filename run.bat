@@ -56,10 +56,12 @@ if not defined JAVA (
 
 echo   Starting on Java !JAVA_VER! ...
 set "JAVAW=%JAVA:java.exe=javaw.exe%"
+set "EXTRA_CP="
+if exist "lib\*.jar" set "EXTRA_CP=;lib\*"
 if exist "%JAVAW%" (
-  start "" "%JAVAW%" -cp "SnakeNET.jar;NetCore.jar" snakenet.Main %*
+  start "" "%JAVAW%" -cp "SnakeNET.jar;NetCore.jar!EXTRA_CP!" snakenet.Main %*
 ) else (
-  start "" "%JAVA%" -cp "SnakeNET.jar;NetCore.jar" snakenet.Main %*
+  start "" "%JAVA%" -cp "SnakeNET.jar;NetCore.jar!EXTRA_CP!" snakenet.Main %*
 )
 exit /b 0
 

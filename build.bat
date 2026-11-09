@@ -6,6 +6,8 @@ cd /d "%~dp0"
 
 set "JDK=C:\Program Files\Java\jdk-25.0.5.0.3\bin\"
 set "MAJOR=25"
+set "EXTRA_CP="
+if exist "lib\*.jar" set "EXTRA_CP=lib\*;"
 
 echo   JDK !MAJOR! found.
 echo.
@@ -18,7 +20,7 @@ mkdir "out\engine" 2>nul
     echo "!F:\=/!"
   )
 )
-"%JDK%javac.exe" --release 25 -encoding UTF-8 -d "out\engine" @"%TEMP%\netcore_sources.txt"
+"%JDK%javac.exe" --release 25 -encoding UTF-8 -cp "!EXTRA_CP!" -d "out\engine" @"%TEMP%\netcore_sources.txt"
 if errorlevel 1 goto :fail
 
 echo   [2/4] Compiling the game...
@@ -30,7 +32,7 @@ mkdir "out\game" 2>nul
     echo "!F:\=/!"
   )
 )
-"%JDK%javac.exe" --release 25 -encoding UTF-8 -cp "out\engine" -d "out\game" @"%TEMP%\snake_sources.txt"
+"%JDK%javac.exe" --release 25 -encoding UTF-8 -cp "out\engine;!EXTRA_CP!" -d "out\game" @"%TEMP%\snake_sources.txt"
 if errorlevel 1 goto :fail
 
 echo   [3/4] Building NetCore.jar...

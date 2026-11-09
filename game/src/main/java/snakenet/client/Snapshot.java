@@ -47,6 +47,18 @@ public final class Snapshot {
     public final int tickRate;
     public final int unitsPerTick;
     public final long recvNanos;
+    public boolean subtick;
+    public int subSteps = 1;
+    public int subIn;
+    public int subApplied;
+    public int subMerged;
+    public int subSameTick;
+    public int subOrderErrors;
+    public int subLastPermille;
+    public int[] subBuckets = new int[0];
+    public long inputDropped;
+    public long voiceAccepted;
+    public long voiceRejected;
     public final List<FoodView> food = new ArrayList<>();
     public final List<SnakeView> snakes = new ArrayList<>();
     public final List<EventView> events = new ArrayList<>();
@@ -66,13 +78,38 @@ public final class Snapshot {
 
     public static Snapshot parse(List<Msg> frame, long recvNanos) {
         Snapshot snap = null;
+        Msg head = null;
         for (Msg m : frame) {
             if (m.is(Protocol.SNAP)) {
+                head = m;
                 snap = new Snapshot(m.num("t", 0), m.numL("st", 0L), m.num("rate", 32), m.num("ms", 0), recvNanos);
                 break;
             }
         }
         if (snap == null) return null;
+        snap.subtick = head.num("se", 0) == 1;
+        snap.subSteps = Math.max(1, Math.min(16, head.num("ss", 1)));
+        snap.subIn = head.num("si", 0);
+        snap.subApplied = head.num("sa", 0);
+        snap.subMerged = head.num("sm", 0);
+        snap.subSameTick = head.num("sx", 0);
+        snap.subOrderErrors = head.num("so", 0);
+        snap.subLastPermille = head.num("sl", 0);
+        snap.inputDropped = head.numL("ix", 0L);
+        snap.voiceAccepted = head.numL("vok", 0L);
+        snap.voiceRejected = head.numL("vdr", 0L);
+        String buckets = head.raw("sb");
+        if (!buckets.isEmpty()) {
+            String[] parts = buckets.split(",");
+            snap.subBuckets = new int[parts.length];
+            for (int i = 0; i < parts.length; i++) {
+                try {
+                    snap.subBuckets[i] = Integer.parseInt(parts[i]);
+                } catch (NumberFormatException ignored) {
+                    snap.subBuckets[i] = 0;
+                }
+            }
+        }
         for (Msg m : frame) {
             switch (m.type()) {
                 case Protocol.FOOD: {

@@ -1,6 +1,8 @@
 package snakenet.server;
 
 import netcore.time.TickConfig;
+import netcore.voice.VoiceGuard;
+import netcore.voice.VoicePacket;
 import snakenet.game.BotBrain;
 import snakenet.game.Cell;
 import snakenet.game.Food;
@@ -61,6 +63,11 @@ public final class Room {
 
         final List<Input> inputs = new ArrayList<>();
         int ackSeq;
+        VoiceGuard voiceGuard;
+        int lastInputSeq;
+        long inputWindowNanos;
+        int inputWindowCount;
+        long inputDropped;
         String token = "";
         volatile boolean reconnecting;
         long reconnectDeadline;
@@ -107,6 +114,18 @@ public final class Room {
     private List<Msg> lastOver = List.of();
     private int snapshotEvery = 1;
 
+    private int subIn;
+    private int subApplied;
+    private int subMerged;
+    private int subSameTick;
+    private int subOrderErrors;
+    private int subLastPermille;
+    private final int[] subBuckets = new int[16];
+
+    private long tickOriginNanos;
+    private long voiceAccepted;
+    private long voiceRejected;
+
     Room(GameServer server, GameConfig cfg) {
         this.server = server;
         this.cfg = cfg.copy();
@@ -150,6 +169,8 @@ public final class Room {
             if (closed) return;
             lastRunnerTick = tickNumber;
             tick = tickBase + tickNumber;
+            long period = 1_000_000_000L / Math.max(1, cfg.tickRate);
+            tickOriginNanos = System.nanoTime() - (long) tick * period;
             try {
                 expireReconnects();
                 if (phase == Phase.COUNT) countdownTick();
@@ -225,6 +246,7 @@ public final class Room {
         }
         String name = uniqueName(GameConfig.sanitizeName(rawName));
         Player p = new Player(nextId++, name, Math.floorMod(color, 10), false, connection);
+        p.voiceGuard = new VoiceGuard(cfg.voiceConfig());
         players.add(p);
         byId.put(p.id, p);
         p.token = token == null ? "" : token;
@@ -250,6 +272,8 @@ public final class Room {
         connection.attachment = p;
         p.inputs.clear();
         p.ackSeq = 0;
+        p.lastInputSeq = 0;
+        p.voiceGuard = null;
 
         if (prev != null && prev != connection) {
             server.send(prev, Wire.encode(List.of(
@@ -366,9 +390,7 @@ public final class Room {
             switch (m.type()) {
                 case Protocol.IN:
                     if (p.snake != null && p.snake.alive) {
-                        p.inputs.add(new Input(m.num("n", 0), m.num("t", tick),
-                                (float) Double.parseDouble(m.raw("s").isEmpty() ? "0" : m.raw("s")),
-                                m.num("d", -1)));
+                        readInput(p, m);
                     }
                     break;
                 case Protocol.READY:
@@ -416,8 +438,32 @@ public final class Room {
 
     
     synchronized void onVoice(netcore.net.Connection connection, byte[] payload) {
+        if (!cfg.voice) {
+            voiceRejected++;
+            return;
+        }
         Player p = connection.attachment instanceof Player ? (Player) connection.attachment : null;
-        if (p == null || payload.length < 4 || phase == Phase.LOBBY) return;
+        if (p == null || p.bot || phase != Phase.RUNNING) {
+            voiceRejected++;
+            return;
+        }
+        if (payload.length < 5) {
+            voiceRejected++;
+            return;
+        }
+        int sequence = ((payload[1] & 0xff) << 8) | (payload[2] & 0xff);
+        int payloadBytes = payload.length - 3;
+        if (payloadBytes < 2 || (payloadBytes & 1) != 0 || payloadBytes > cfg.voiceMaxPacketBytes) {
+            voiceRejected++;
+            return;
+        }
+        if (p.voiceGuard == null) p.voiceGuard = new VoiceGuard(cfg.voiceConfig());
+        short[] pcm = VoicePacket.readPcm(payload, 3, payloadBytes);
+        if (!p.voiceGuard.accept(sequence, pcm, System.nanoTime())) {
+            voiceRejected++;
+            return;
+        }
+        voiceAccepted++;
         byte[] out = new byte[payload.length + 2];
         out[0] = Wire.VOICE;
         out[1] = (byte) (p.id >> 8);
@@ -426,7 +472,8 @@ public final class Room {
         server.broadcastVoice(out, connection);
     }
 
-    private void chat(Player from, String text) {        String clean = text == null ? "" : text.replace('\n', ' ').replace('\r', ' ').trim();
+    private void chat(Player from, String text) {
+        String clean = text == null ? "" : text.replace('\n', ' ').replace('\r', ' ').trim();
         if (clean.isEmpty()) return;
         if (clean.length() > 200) clean = clean.substring(0, 200);
         Msg m = Msg.of(Protocol.CHAT).putStr("from", from.name).putStr("text", clean).put("kind", 0)
@@ -455,6 +502,8 @@ public final class Room {
                 break;
             case "subtick":
                 cfg.subtick = value != 0;
+                resetSubtickStats();
+                system("subtick " + (cfg.subtick ? "on (timestamps)" : "off"));
                 restart = true;
                 break;
             case "walls":
@@ -543,11 +592,15 @@ public final class Room {
         foods.clear();
         events.clear();
         lastOver = List.of();
+        resetSubtickStats();
         int index = 0;
         for (Player p : players) {
             p.ready = false;
             p.inputs.clear();
             p.ackSeq = 0;
+            p.lastInputSeq = 0;
+            p.inputDropped = 0;
+            p.voiceGuard = null;
             p.snake = new SnakeState(p.id, p.name, p.color, p.bot);
             placeSnake(p.snake, index++, Math.max(1, players.size()));
         }
@@ -660,6 +713,110 @@ public final class Room {
         return true;
     }
 
+    private void resetSubtickStats() {
+        subIn = 0;
+        subApplied = 0;
+        subMerged = 0;
+        subSameTick = 0;
+        subOrderErrors = 0;
+        subLastPermille = 0;
+        java.util.Arrays.fill(subBuckets, 0);
+    }
+
+    private void trackSubInput(float sub) {
+        if (!cfg.subtick) return;
+        subIn++;
+        subBuckets[subBucket(sub)]++;
+    }
+
+    private int subBucket(float sub) {
+        int steps = Math.max(1, Math.min(16, cfg.subSteps));
+        int bucket = (int) (sub * steps);
+        return Math.max(0, Math.min(steps - 1, bucket));
+    }
+
+    private String subBucketText() {
+        int steps = Math.max(1, Math.min(16, cfg.subSteps));
+        StringBuilder sb = new StringBuilder(steps * 3);
+        for (int i = 0; i < steps; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(subBuckets[i]);
+        }
+        return sb.toString();
+    }
+
+    private static float parseSub(String raw) {
+        if (raw == null || raw.isEmpty()) return 0f;
+        try {
+            return (float) Math.max(0, Math.min(1, Double.parseDouble(raw)));
+        } catch (NumberFormatException e) {
+            return 0f;
+        }
+    }
+
+    private long nanosPerTick() {
+        return 1_000_000_000L / Math.max(1, cfg.tickRate);
+    }
+
+    private boolean allowInputRate(Player p, long now) {
+        if (now - p.inputWindowNanos > 1_000_000_000L) {
+            p.inputWindowNanos = now;
+            p.inputWindowCount = 0;
+        }
+        p.inputWindowCount++;
+        return p.inputWindowCount <= Math.max(4, cfg.inputMaxPerSec);
+    }
+
+    private void readInput(Player p, Msg m) {
+        if (phase != Phase.RUNNING || p.snake == null || !p.snake.alive) return;
+        int sequence = m.num("n", 0);
+        int dir = m.num("d", -1);
+        if (sequence <= 0 || dir < 0 || dir >= SnakeState.DX.length) {
+            p.inputDropped++;
+            return;
+        }
+        if (p.lastInputSeq > 0 && sequence > 0 && sequence <= p.lastInputSeq) {
+            p.inputDropped++;
+            return;
+        }
+        long now = System.nanoTime();
+        if (!allowInputRate(p, now)) {
+            p.inputDropped++;
+            return;
+        }
+        long period = nanosPerTick();
+        int scheduledTick = m.num("t", tick);
+        float sub = parseSub(m.raw("s"));
+        long stamp = m.numL("ts", 0L);
+        if (cfg.subtick && stamp > 0 && tickOriginNanos > 0) {
+            long earliest = now - (long) (cfg.inputMaxBehindTicks + 2) * period;
+            long latest = now + (long) (cfg.inputMaxAheadTicks + 1) * period;
+            if (stamp < earliest || stamp > latest) {
+                p.inputDropped++;
+                return;
+            }
+            long rel = stamp - tickOriginNanos;
+            if (rel >= 0) {
+                scheduledTick = (int) Math.min(Integer.MAX_VALUE, rel / period);
+                sub = (rel % period) / (float) period;
+            }
+        }
+        int minTick = tick - cfg.inputMaxBehindTicks;
+        int maxTick = tick + cfg.inputMaxAheadTicks;
+        if (scheduledTick < minTick || scheduledTick > maxTick) {
+            p.inputDropped++;
+            return;
+        }
+        sub = Math.max(0f, Math.min(0.999f, sub));
+        if (p.inputs.size() >= Math.max(4, cfg.inputMaxQueue)) {
+            p.inputs.remove(0);
+            p.inputDropped++;
+        }
+        if (sequence > 0) p.lastInputSeq = sequence;
+        p.inputs.add(new Input(sequence, scheduledTick, sub, dir));
+        trackSubInput(sub);
+    }
+
     
     
     
@@ -676,10 +833,23 @@ public final class Room {
             }
             Input chosen = null;
             List<Msg> acks = null;
+            int eligible = 0;
+            int bestTick = Integer.MIN_VALUE;
+            int sameTick = 0;
+            float bestSub = -1f;
             Iterator<Input> it = p.inputs.iterator();
             while (it.hasNext()) {
                 Input in = it.next();
                 if (in.tick > tick) continue;
+                eligible++;
+                if (in.tick > bestTick) {
+                    bestTick = in.tick;
+                    sameTick = 1;
+                    bestSub = in.sub;
+                } else if (in.tick == bestTick) {
+                    sameTick++;
+                    if (in.sub > bestSub) bestSub = in.sub;
+                }
                 if (chosen == null
                         || in.tick > chosen.tick
                         || (in.tick == chosen.tick && in.sub >= chosen.sub)) {
@@ -690,8 +860,27 @@ public final class Room {
                 acks.add(Msg.of(Protocol.ACK).put("n", in.seq).put("t", tick));
                 it.remove();
             }
+            if (cfg.subtick && eligible > 0) {
+                if (chosen != null) {
+                    subApplied++;
+                    subLastPermille = Math.round(chosen.sub * 1000f);
+                    subMerged += eligible - 1;
+                    if (chosen.sub + 1e-5f < bestSub) subOrderErrors++;
+                } else {
+                    subMerged += eligible;
+                }
+                if (sameTick > 1) subSameTick += sameTick - 1;
+            }
             if (chosen != null && !SnakeState.isOpposite(chosen.dir, s.dir)) {
-                s.pendingDir = chosen.dir;
+                int units = cfg.unitsPerTick();
+                double stepAt = (SnakeState.UNITS - s.acc) / (double) units;
+                stepAt = Math.max(0, Math.min(1, stepAt));
+                boolean beforeStep = chosen.tick < tick || chosen.sub <= stepAt + 1e-4;
+                if (beforeStep) {
+                    s.pendingDir = chosen.dir;
+                } else {
+                    s.queuedDir = chosen.dir;
+                }
             }
             if (acks != null && p.connection != null) {
                 server.send(p.connection, Wire.encode(acks));
@@ -782,11 +971,13 @@ public final class Room {
             s.body.addFirst(e.getValue());
             if (s.grow > 0) s.grow--;
             else s.body.removeLast();
-            
-            
             if (s.pendingDir >= 0) {
                 s.dir = s.pendingDir;
                 s.pendingDir = -1;
+            }
+            if (s.queuedDir >= 0) {
+                s.pendingDir = s.queuedDir;
+                s.queuedDir = -1;
             }
         }
 
@@ -848,11 +1039,25 @@ public final class Room {
 
     private List<Msg> snapshotFrame() {
         List<Msg> frame = new ArrayList<>();
+        long droppedInputs = 0;
+        for (Player p : players) droppedInputs += p.inputDropped;
         frame.add(Msg.of(Protocol.SNAP)
                 .put("t", tick)
                 .put("st", System.nanoTime())
                 .put("rate", cfg.tickRate)
-                .put("ms", cfg.unitsPerTick()));
+                .put("ms", cfg.unitsPerTick())
+                .put("se", cfg.subtick ? 1 : 0)
+                .put("ss", cfg.subSteps)
+                .put("si", subIn)
+                .put("sa", subApplied)
+                .put("sm", subMerged)
+                .put("sx", subSameTick)
+                .put("so", subOrderErrors)
+                .put("sl", subLastPermille)
+                .put("sb", subBucketText())
+                .put("ix", droppedInputs)
+                .put("vok", voiceAccepted)
+                .put("vdr", voiceRejected));
         for (Food f : foods) {
             frame.add(Msg.of(Protocol.FOOD).put("x", f.x).put("y", f.y).put("k", f.kind));
         }

@@ -14,6 +14,7 @@ public final class SnakePredictState {
     public int dir;
     public int acc;
     public int pendingDir = -1;
+    public int queuedDir = -1;
     public boolean alive;
 
     public SnakePredictState(int[] xs, int[] ys, int dir, int acc, boolean alive) {
@@ -31,6 +32,7 @@ public final class SnakePredictState {
     public SnakePredictState copy() {
         SnakePredictState s = new SnakePredictState(xs.clone(), ys.clone(), dir, acc, alive);
         s.pendingDir = pendingDir;
+        s.queuedDir = queuedDir;
         return s;
     }
 
@@ -69,9 +71,14 @@ public final class SnakePredictState {
         @Override
         public SnakePredictState step(SnakePredictState state, InputCommand input) {
             SnakePredictState s = state.copy();
-            
             if (input != null && input.action >= 0 && !isOpposite(input.action, s.dir)) {
-                s.pendingDir = input.action;
+                double stepAt = (1024 - s.acc) / (double) unitsPerTick;
+                stepAt = Math.max(0, Math.min(1, stepAt));
+                if (input.sub <= stepAt + 1e-4) {
+                    s.pendingDir = input.action;
+                } else {
+                    s.queuedDir = input.action;
+                }
             }
             if (!s.alive || s.xs.length == 0) return s;
 
@@ -100,6 +107,10 @@ public final class SnakePredictState {
             if (s.pendingDir >= 0) {
                 s.dir = s.pendingDir;
                 s.pendingDir = -1;
+            }
+            if (s.queuedDir >= 0) {
+                s.pendingDir = s.queuedDir;
+                s.queuedDir = -1;
             }
             return s;
         }

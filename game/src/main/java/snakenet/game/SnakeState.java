@@ -27,12 +27,8 @@ public final class SnakeState {
     public final Deque<Cell> body = new ArrayDeque<>();
 
     public int dir = RIGHT;
-    
-
-
-
-
     public int pendingDir = -1;
+    public int queuedDir = -1;
     
     public int acc;
     public int score;
@@ -59,6 +55,7 @@ public final class SnakeState {
         body.clear();
         dir = direction;
         pendingDir = -1;
+        queuedDir = -1;
         for (int i = 0; i < length; i++) {
             body.addLast(new Cell(hx - DX[direction] * i, hy - DY[direction] * i));
         }

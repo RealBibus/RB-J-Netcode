@@ -23,6 +23,7 @@ final class UdpPeer implements Transport {
     static final byte T_ACCEPT = 15;
     static final byte T_ACK = 16;
     static final byte T_DATA_UNREL_Z = 17;
+    static final byte T_VOICE = 18;
 
     private static final int HEADER = 1 + 4 + 4;
     private static final int FRAG_HEADER = 4 + 1 + 1;
@@ -145,7 +146,9 @@ final class UdpPeer implements Transport {
         if (!open) return;
         List<byte[]> datagrams = new ArrayList<>(1);
         synchronized (lock) {
-            if (packet.type == Packet.DATA) {
+            if (packet.type == Packet.VOICE) {
+                datagrams.add(build(T_VOICE, packet.payload));
+            } else if (packet.type == Packet.DATA) {
                 if (packet.reliable || packet.payload.length > 8000) {
                     queueReliable(packet.payload);
                 } else {
@@ -227,7 +230,7 @@ final class UdpPeer implements Transport {
     }
 
     void onDatagram(byte[] data, int len) {
-        if (!open || len < HEADER) return;
+        if (!open || len < HEADER || len > config.maxDatagramBytes()) return;
         lastRecv = System.nanoTime();
         stats.onIn(len);
 
@@ -255,6 +258,9 @@ final class UdpPeer implements Transport {
                     break;
                 case T_PONG:
                     control = new Packet(Packet.PONG, 0, rest(b), false);
+                    break;
+                case T_VOICE:
+                    control = new Packet(Packet.VOICE, 0, rest(b), false);
                     break;
                 case T_ACK:
                     break;

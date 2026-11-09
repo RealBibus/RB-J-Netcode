@@ -1,6 +1,10 @@
 package snakenet.game;
 
+import netcore.net.NetConfig;
+import netcore.predict.PredictionConfig;
 import netcore.time.TickConfig;
+import netcore.voice.VoiceConfig;
+import netcore.voice.VoiceMode;
 import snakenet.net.Msg;
 
 public final class GameConfig {
@@ -19,11 +23,52 @@ public final class GameConfig {
     public int cellsPerSec = SPEED_CELLS[1];
     public int tickRate = 32;
     public boolean subtick = true;
-    public int subSteps = 4;
+    public int subSteps = 8;
     public int maxPlayers = 8;
     public boolean walls = true;
     public boolean udp = true;
     public String serverName = "Game";
+
+    public boolean preciseSpin = true;
+    public int maxCatchUp = 4;
+    public int spinWindowMicros = 900;
+    public int tickPriority = Thread.NORM_PRIORITY + 1;
+
+    public double predictionSnap = 2.2;
+    public int predictionHistory = 48;
+    public int maxAdvanceTicks = 64;
+    public int interpolationDelayMs = 66;
+    public boolean nonlinearInterp = true;
+    public int predictionSmoothMs = 70;
+
+    public int inputMaxPerSec = 60;
+    public int inputMaxAheadTicks = 8;
+    public int inputMaxBehindTicks = 2;
+    public int inputMaxQueue = 48;
+
+    public int mtu = 1200;
+    public int heartbeatMs = 300;
+    public int serverDeadAfterMs = 4000;
+    public int clientDeadAfterMs = 8000;
+    public int reconnectWindowMs = 30_000;
+    public int silentLossMs = 800;
+    public int reconnectBackoffBaseMs = 100;
+    public int reconnectBackoffMaxMs = 900;
+    public int dataPacketsPerSec = 400;
+    public int dataBytesPerSec = 1024 * 1024;
+    public int controlPacketsPerSec = 200;
+    public int controlBytesPerSec = 256 * 1024;
+
+    public boolean voice = true;
+    public int voiceMode = 0;
+    public int voiceJitterTarget = 3;
+    public int voiceJitterMax = 8;
+    public boolean voiceAdaptive = true;
+    public boolean voiceActivity = false;
+    public float voiceVad = 0.02f;
+    public int voiceMaxPacketsPerSec = 60;
+    public int voiceMaxBytesPerSec = 96 * 1024;
+    public int voiceMaxPacketBytes = 640;
 
     public GameConfig copy() {
         GameConfig c = new GameConfig();
@@ -37,11 +82,82 @@ public final class GameConfig {
         c.walls = walls;
         c.udp = udp;
         c.serverName = serverName;
+        c.preciseSpin = preciseSpin;
+        c.maxCatchUp = maxCatchUp;
+        c.spinWindowMicros = spinWindowMicros;
+        c.tickPriority = tickPriority;
+        c.predictionSnap = predictionSnap;
+        c.predictionHistory = predictionHistory;
+        c.maxAdvanceTicks = maxAdvanceTicks;
+        c.interpolationDelayMs = interpolationDelayMs;
+        c.nonlinearInterp = nonlinearInterp;
+        c.predictionSmoothMs = predictionSmoothMs;
+        c.inputMaxPerSec = inputMaxPerSec;
+        c.inputMaxAheadTicks = inputMaxAheadTicks;
+        c.inputMaxBehindTicks = inputMaxBehindTicks;
+        c.inputMaxQueue = inputMaxQueue;
+        c.mtu = mtu;
+        c.heartbeatMs = heartbeatMs;
+        c.serverDeadAfterMs = serverDeadAfterMs;
+        c.clientDeadAfterMs = clientDeadAfterMs;
+        c.reconnectWindowMs = reconnectWindowMs;
+        c.silentLossMs = silentLossMs;
+        c.reconnectBackoffBaseMs = reconnectBackoffBaseMs;
+        c.reconnectBackoffMaxMs = reconnectBackoffMaxMs;
+        c.dataPacketsPerSec = dataPacketsPerSec;
+        c.dataBytesPerSec = dataBytesPerSec;
+        c.controlPacketsPerSec = controlPacketsPerSec;
+        c.controlBytesPerSec = controlBytesPerSec;
+        c.voice = voice;
+        c.voiceMode = voiceMode;
+        c.voiceJitterTarget = voiceJitterTarget;
+        c.voiceJitterMax = voiceJitterMax;
+        c.voiceAdaptive = voiceAdaptive;
+        c.voiceActivity = voiceActivity;
+        c.voiceVad = voiceVad;
+        c.voiceMaxPacketsPerSec = voiceMaxPacketsPerSec;
+        c.voiceMaxBytesPerSec = voiceMaxBytesPerSec;
+        c.voiceMaxPacketBytes = voiceMaxPacketBytes;
         return c;
     }
 
     public TickConfig tickConfig() {
-        return subtick ? TickConfig.subtick(tickRate, subSteps) : TickConfig.fixed(tickRate);
+        TickConfig base = subtick ? TickConfig.subtick(tickRate, subSteps) : TickConfig.fixed(tickRate);
+        return base.withPrecise(preciseSpin)
+                .withCatchUp(maxCatchUp)
+                .withSpinWindow(Math.max(0, spinWindowMicros) * 1000L)
+                .withPriority(tickPriority);
+    }
+
+    public PredictionConfig predictionConfig() {
+        return new PredictionConfig(predictionSnap, predictionHistory, maxAdvanceTicks, interpolationDelayMs);
+    }
+
+    public VoiceMode voiceModeValue() {
+        return voiceMode == 1 ? VoiceMode.WEBRTC : VoiceMode.UDP;
+    }
+
+    public VoiceConfig voiceConfig() {
+        return new VoiceConfig(16000f, 320, 20, voiceJitterTarget, voiceJitterMax, voiceAdaptive,
+                voiceActivity, voiceVad, voiceMaxPacketBytes, voiceMaxPacketsPerSec,
+                voiceMaxBytesPerSec, voiceModeValue());
+    }
+
+    public NetConfig netConfig(boolean server) {
+        NetConfig.Builder b = udp
+                ? NetConfig.builder().protocol(NetConfig.Protocol.UDP).allowTcp(!server)
+                : NetConfig.builder().protocol(NetConfig.Protocol.TCP).allowTcp(true);
+        return b.mtu(mtu)
+                .heartbeatMs(heartbeatMs)
+                .deadAfterMs(server ? serverDeadAfterMs : clientDeadAfterMs)
+                .reconnect(true, reconnectWindowMs)
+                .silentLossMs(silentLossMs)
+                .reconnectBackoff(reconnectBackoffBaseMs, reconnectBackoffMaxMs)
+                .dataRate(dataPacketsPerSec, dataBytesPerSec)
+                .controlRate(controlPacketsPerSec, controlBytesPerSec)
+                .voiceRate(voiceMaxPacketsPerSec, voiceMaxBytesPerSec)
+                .compression(true)
+                .build();
     }
 
     public int unitsPerTick() {
@@ -84,7 +200,7 @@ public final class GameConfig {
     }
 
     public String tickLabel() {
-        return tickRate + " Hz" + (subtick ? " · subtick ×" + subSteps : "");
+        return tickRate + " Hz" + (subtick ? " · subtick" : "");
     }
 
     public void applySize(int i) {
@@ -108,7 +224,9 @@ public final class GameConfig {
                 .put("cps", cellsPerSec).put("rate", tickRate)
                 .put("sub", subtick ? 1 : 0).put("subs", subSteps)
                 .put("walls", walls ? 1 : 0).put("max", maxPlayers)
-                .put("udp", udp ? 1 : 0);
+                .put("udp", udp ? 1 : 0)
+                .put("vo", voice ? 1 : 0).put("vm", voiceMode)
+                .put("vj", voiceJitterTarget).put("vx", voiceJitterMax);
     }
 
     public static GameConfig read(Msg m, GameConfig def) {
@@ -122,6 +240,10 @@ public final class GameConfig {
         if (m.has("walls")) c.walls = m.bool("walls");
         if (m.has("udp")) c.udp = m.num("udp", 1) == 1;
         c.maxPlayers = clamp(m.num("max", c.maxPlayers), 1, 8);
+        if (m.has("vo")) c.voice = m.num("vo", c.voice ? 1 : 0) == 1;
+        if (m.has("vm")) c.voiceMode = clamp(m.num("vm", c.voiceMode), 0, 1);
+        if (m.has("vj")) c.voiceJitterTarget = clamp(m.num("vj", c.voiceJitterTarget), 1, 16);
+        if (m.has("vx")) c.voiceJitterMax = clamp(m.num("vx", c.voiceJitterMax), c.voiceJitterTarget, 64);
         return c;
     }
 

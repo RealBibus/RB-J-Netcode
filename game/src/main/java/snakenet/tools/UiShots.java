@@ -49,6 +49,7 @@ public final class UiShots {
 
         GameScreen game = app.gameScreen();
         feedGame(game);
+        game.setPreviewSubtick(12, 0.731f);
         shoot(game, new File(dir, "5-game.png"), 12);
 
         game.getActionMap().get("paneltoggle").actionPerformed(
@@ -62,6 +63,10 @@ public final class UiShots {
         shoot(game, new File(dir, "5d-chat.png"), 6);
         game.getActionMap().get("paneltoggle").actionPerformed(
                 new java.awt.event.ActionEvent(game, java.awt.event.ActionEvent.ACTION_PERFORMED, "panel"));
+
+        app.setPreviewLinkLost(true);
+        shoot(game, new File(dir, "5e-connection.png"), 8);
+        app.setPreviewLinkLost(false);
 
         feedOver(game);
         shoot(game, new File(dir, "6-results.png"), 20);
@@ -128,7 +133,11 @@ public final class UiShots {
     private static List<Msg> snapshot(int tick, int ms, boolean second) {
         List<Msg> frame = new ArrayList<>();
         frame.add(Msg.of(Protocol.SNAP).put("t", tick).put("st", System.nanoTime())
-                .put("rate", 32).put("ms", ms));
+                .put("rate", 32).put("ms", ms)
+                .put("se", 1).put("ss", 8)
+                .put("si", 12).put("sa", 7).put("sm", 5)
+                .put("sx", 3).put("so", 0).put("sl", 731).put("sb", "1,2,2,1,2,2,1,1")
+                .put("ix", 2).put("vok", 84).put("vdr", 1));
         frame.add(Msg.of(Protocol.FOOD).put("x", 18).put("y", 9).put("k", 0));
         frame.add(Msg.of(Protocol.FOOD).put("x", 6).put("y", 4).put("k", 1));
         frame.add(Msg.of(Protocol.FOOD).put("x", 27).put("y", 4).put("k", 3));

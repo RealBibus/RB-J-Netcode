@@ -223,7 +223,7 @@ public final class LobbyScreen extends Screen {
         bField.label = "Field · " + cfg.sizeLabel();
         bSpeed.label = cfg.cellsPerSec + " cells/s";
         bTick.label = cfg.tickRate + " Hz";
-        bSub.label = cfg.subtick ? "SUB ×" + cfg.subSteps : "SUB off";
+        bSub.label = cfg.subtick ? "SUB on" : "SUB off";
         bSub.selected = cfg.subtick;
         bWalls.label = cfg.walls ? "Walls · solid" : "Walls · wrap";
         bWalls.selected = cfg.walls;

@@ -81,6 +81,14 @@ public final class ServerClock {
         return pos - Math.floor(pos);
     }
 
+    public long timeOfTickNanos(int tickNumber, double sub, ClockSync clock) {
+        long now = lastServerNanos == 0 ? System.nanoTime() : serverNanosNow(clock);
+        double ahead = tickNumber - tickPosition(clock);
+        long offset = Math.round(ahead * nanosPerTick());
+        long within = Math.round(Math.max(0, Math.min(1, sub)) * nanosPerTick());
+        return now + offset + within;
+    }
+
     
 
 

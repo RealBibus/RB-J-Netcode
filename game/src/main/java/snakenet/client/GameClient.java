@@ -2,6 +2,7 @@ package snakenet.client;
 
 import netcore.net.NetClient;
 import netcore.sync.ClockSync;
+import netcore.voice.VoicePacket;
 import snakenet.net.Msg;
 import snakenet.net.Protocol;
 import snakenet.net.Wire;
@@ -15,7 +16,7 @@ public final class GameClient implements NetClient.Listener {
     public interface Listener {
         void onFrame(List<Msg> frame);
 
-        void onVoice(int playerId, short[] pcm);
+        void onVoice(int playerId, int sequence, short[] pcm);
 
         void onClosed(String reason);
 
@@ -51,13 +52,13 @@ public final class GameClient implements NetClient.Listener {
     @Override
     public void onMessage(byte[] payload) {
         if (Wire.isVoice(payload)) {
+            if (payload.length < 7) return;
             int playerId = ((payload[1] & 0xff) << 8) | (payload[2] & 0xff);
-            int count = Math.max(0, (payload.length - 5) / 2);
-            short[] pcm = new short[count];
-            for (int i = 0; i < count; i++) {
-                pcm[i] = (short) ((payload[5 + i * 2] & 0xff) | ((payload[6 + i * 2] & 0xff) << 8));
-            }
-            SwingUtilities.invokeLater(() -> listener.onVoice(playerId, pcm));
+            int sequence = ((payload[3] & 0xff) << 8) | (payload[4] & 0xff);
+            int payloadBytes = payload.length - 5;
+            if (payloadBytes < 2 || (payloadBytes & 1) != 0) return;
+            short[] pcm = VoicePacket.readPcm(payload, 5, payloadBytes);
+            SwingUtilities.invokeLater(() -> listener.onVoice(playerId, sequence, pcm));
             return;
         }
         List<Msg> frame = Wire.decode(payload);
@@ -71,7 +72,7 @@ public final class GameClient implements NetClient.Listener {
     }
 
     public void sendVoice(byte[] frame) {
-        if (net != null && net.isOpen()) net.sendUnreliable(frame);
+        if (net != null && net.isOpen()) net.sendVoice(frame);
     }
 
     @Override

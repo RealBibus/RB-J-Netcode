@@ -2,11 +2,11 @@ package snakenet.ui;
 
 import snakenet.Prefs;
 import snakenet.audio.Sfx;
-import snakenet.audio.VoiceChat;
 import snakenet.client.GameClient;
 import snakenet.game.GameConfig;
 import snakenet.net.Msg;
 import netcore.net.NetInfo;
+import netcore.voice.VoiceEngine;
 import snakenet.net.Protocol;
 import snakenet.server.GameServer;
 
@@ -18,10 +18,12 @@ public final class App {
 
     private final Prefs prefs;
     private final Backdrop backdrop = new Backdrop();
+    private final GameConfig netDefaults = new GameConfig();
+    private String voiceKey = "";
 
     private MainWindow window;
     private GameClient client;
-    private VoiceChat voice;
+    private VoiceEngine voice;
     private GameServer server;
 
     private int myId = -1;
@@ -45,6 +47,7 @@ public final class App {
     private boolean toastError;
 
     private volatile boolean linkLost;
+    private volatile boolean previewLink;
     private volatile long linkLostNanos;
     private volatile long linkWindowMs = 30_000;
     private volatile long linkRestoredNanos;
@@ -77,6 +80,12 @@ public final class App {
 
     public void setPreviewAddress(String address) {
         this.gameAddress = address == null ? "" : address;
+    }
+
+    public void setPreviewLinkLost(boolean on) {
+        previewLink = on;
+        linkLost = on;
+        linkLostNanos = System.nanoTime() - 3_000_000_000L;
     }
 
     public MainWindow window() {
@@ -189,9 +198,9 @@ public final class App {
             }
 
             @Override
-            public void onVoice(int playerId, short[] pcm) {
-                VoiceChat v = voice;
-                if (v != null) v.onVoice(playerId, pcm);
+            public void onVoice(int playerId, int sequence, short[] pcm) {
+                VoiceEngine v = voice;
+                if (v != null) v.onVoice(playerId, sequence, pcm);
             }
 
             @Override
@@ -228,24 +237,39 @@ public final class App {
                     }
                 }
             }
-        });
+        }, netDefaults.netConfig(false));
         client = holder[0];
         myId = -1;
         if (voice != null) voice.stop();
-        voice = new VoiceChat(frame -> {
+        voice = null;
+        voiceKey = "";
+        applyVoice(netDefaults);
+        client.send(Msg.of(Protocol.HELLO).putStr("name", myName).put("color", myColor)
+                .putStr("token", sessionToken()));
+    }
+
+    private void applyVoice(GameConfig cfg) {
+        String key = cfg.voice + ":" + cfg.voiceMode + ":" + cfg.voiceJitterTarget + ":"
+                + cfg.voiceJitterMax + ":" + cfg.voiceAdaptive + ":" + cfg.voiceActivity
+                + ":" + cfg.voiceMaxPacketBytes + ":" + cfg.voiceMaxPacketsPerSec;
+        if (key.equals(voiceKey)) return;
+        voiceKey = key;
+        if (voice != null) voice.stop();
+        voice = null;
+        if (!cfg.voice) return;
+        VoiceEngine engine = new VoiceEngine(cfg.voiceConfig(), frame -> {
             GameClient c = client;
             if (c != null) c.sendVoice(frame);
         });
-        voice.start();
-        client.send(Msg.of(Protocol.HELLO).putStr("name", myName).put("color", myColor)
-                .putStr("token", sessionToken()));
+        engine.start();
+        voice = engine;
     }
 
     public String sessionToken() {
         return sessionToken;
     }
 
-    public VoiceChat voice() {
+    public VoiceEngine voice() {
         return voice;
     }
 
@@ -272,6 +296,7 @@ public final class App {
             voice.stop();
             voice = null;
         }
+        voiceKey = "";
         GameServer s = server;
         server = null;
         if (s != null) s.stop();
@@ -306,6 +331,7 @@ public final class App {
 
     private void handleFrame(List<Msg> frame) {
         boolean start = false;
+        Msg startMsg = null;
         int lobbyPhase = -1;
         for (Msg m : frame) {
             switch (m.type()) {
@@ -315,6 +341,7 @@ public final class App {
                     break;
                 case Protocol.START:
                     start = true;
+                    startMsg = m;
                     break;
                 case Protocol.LOBBY:
                     lobbyPhase = m.num("phase", -1);
@@ -334,6 +361,7 @@ public final class App {
         if (game != null) game.onFrame(frame);
 
         if (start) {
+            if (startMsg != null) applyVoice(GameConfig.read(startMsg, netDefaults));
             window.show(gameScreen());
         } else if (lobbyPhase == 0 && window.current() == gameScreen()) {
             window.show(lobbyScreen());
@@ -349,11 +377,11 @@ public final class App {
     }
 
     public boolean connectionLost() {
-        return linkLost && client != null;
+        return linkLost && (client != null || previewLink);
     }
 
     public float connectionDim() {
-        if (!linkLost || client == null) return 0f;
+        if (!linkLost || (client == null && !previewLink)) return 0f;
         long ms = (System.nanoTime() - linkLostNanos) / 1_000_000L;
         if (ms < 500) return 0f;
         float alpha = (float) Math.min(1.0, (ms - 500) / 350.0);

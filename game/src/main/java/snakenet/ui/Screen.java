@@ -253,21 +253,23 @@ public abstract class Screen extends JPanel implements MouseListener, MouseMotio
             g.setColor(new Color(0, 0, 0, Math.round(dim * 255)));
             g.fillRect(0, 0, w, h);
 
-            float pulse = 0.55f + 0.45f * (float) (0.5 + 0.5 * Math.sin(time * 3.4));
-            float alpha = Math.min(1f, dim / 0.72f) * pulse;
-            g.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, alpha));
+            float base = Math.min(1f, dim / 0.72f);
+            g.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, base));
 
             java.awt.geom.Path2D.Double triangle = new java.awt.geom.Path2D.Double();
             triangle.moveTo(cx, cy - 156 * s);
             triangle.lineTo(cx + 74 * s, cy - 22 * s);
             triangle.lineTo(cx - 74 * s, cy - 22 * s);
             triangle.closePath();
-            g.setColor(new Color(0xFF, 0xAE, 0x2E));
+            g.setColor(new Color(0xF4, 0xF7, 0xFF));
             g.fill(triangle);
-            g.setColor(new Color(0x2A, 0x16, 0x00));
+            g.setColor(new Color(0x0A, 0x0D, 0x12));
             g.fill(new java.awt.geom.RoundRectangle2D.Double(cx - 6 * s, cy - 114 * s, 12 * s, 54 * s, 8 * s, 8 * s));
             g.fill(new java.awt.geom.Ellipse2D.Double(cx - 6 * s, cy - 50 * s, 12 * s, 12 * s));
 
+            float textPulse = 0.62f + 0.38f * (float) (0.5 + 0.5 * Math.sin(time * 3.4));
+            g.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER,
+                    Math.min(1f, base * textPulse)));
             g.setFont(Theme.bold((float) Math.max(18, 28 * s)));
             FontMetrics fm = g.getFontMetrics();
             String title = "CONNECTION LOST";

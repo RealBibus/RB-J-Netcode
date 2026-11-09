@@ -1,47 +1,34 @@
 package netcore.time;
 
 
-
-
-
-
-
-
-
-
-
-
 public final class TickRunner implements AutoCloseable {
 
     public interface Listener {
-        
-
-
-
         void onTick(int tick, double lagMs);
     }
-
-    private static final long SPIN_WINDOW_NANOS = 900_000L;
 
     private final TickConfig config;
     private final Listener listener;
     private final int maxCatchUp;
+    private final long spinWindowNanos;
     private final TickStats stats = new TickStats();
 
     private Thread thread;
     private volatile boolean running;
-    private volatile boolean precise = true;
+    private volatile boolean precise;
     private volatile int tick;
     private volatile long originNanos;
 
     public TickRunner(TickConfig config, Listener listener) {
-        this(config, listener, 4);
+        this(config, listener, config.maxCatchUp());
     }
 
     public TickRunner(TickConfig config, Listener listener, int maxCatchUp) {
         this.config = config;
         this.listener = listener;
         this.maxCatchUp = Math.max(1, maxCatchUp);
+        this.spinWindowNanos = config.spinWindowNanos();
+        this.precise = config.precise();
     }
 
     public TickConfig config() {
@@ -60,6 +47,10 @@ public final class TickRunner implements AutoCloseable {
         return originNanos;
     }
 
+    public boolean precise() {
+        return precise;
+    }
+
     public void setPrecise(boolean precise) {
         this.precise = precise;
     }
@@ -69,8 +60,7 @@ public final class TickRunner implements AutoCloseable {
         running = true;
         thread = new Thread(this::loop, "netcore-tick");
         thread.setDaemon(true);
-        
-        thread.setPriority(Thread.NORM_PRIORITY + 1);
+        thread.setPriority(config.threadPriority());
         thread.start();
     }
 
@@ -106,10 +96,10 @@ public final class TickRunner implements AutoCloseable {
         while (running) {
             long remain = deadline - System.nanoTime();
             if (remain <= 0) return;
-            if (precise && remain <= SPIN_WINDOW_NANOS) {
+            if (precise && remain <= spinWindowNanos) {
                 Thread.onSpinWait();
             } else {
-                long millis = (remain - SPIN_WINDOW_NANOS) / 1_000_000L;
+                long millis = (remain - spinWindowNanos) / 1_000_000L;
                 if (millis < 1) millis = 1;
                 try {
                     Thread.sleep(millis);

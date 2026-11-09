@@ -24,10 +24,7 @@ public final class GameServer {
     public GameServer(int port, String name, GameConfig cfg) {
         this.name = name == null || name.isBlank() ? "Game" : name;
         this.room = new Room(this, cfg);
-        this.net = new NetServer(port, cfg.udp
-                ? netcore.net.NetConfig.udp(false).withDeadAfter(4000)
-                : netcore.net.NetConfig.tcp().withDeadAfter(4000),
-                new NetServer.Listener() {
+        this.net = new NetServer(port, cfg.netConfig(true), new NetServer.Listener() {
             @Override
             public void onConnect(Connection connection) {
                 room.onConnect(connection);
@@ -89,7 +86,7 @@ public final class GameServer {
     
     void broadcastVoice(byte[] payload, Connection except) {
         for (Connection c : net.connections()) {
-            if (c != except && c.isOpen()) c.send(payload, false);
+            if (c != except && c.isOpen()) c.sendVoice(payload);
         }
     }
 

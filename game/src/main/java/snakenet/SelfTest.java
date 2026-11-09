@@ -14,6 +14,10 @@ import netcore.predict.Predictor;
 import netcore.predict.SimModel;
 import netcore.time.TickClock;
 import netcore.time.TickConfig;
+import netcore.voice.VoiceConfig;
+import netcore.voice.VoiceGuard;
+import netcore.voice.VoiceJitterBuffer;
+import netcore.voice.VoiceMode;
 import snakenet.client.GameClient;
 import snakenet.client.SnakePredictState;
 import snakenet.game.GameConfig;
@@ -50,6 +54,11 @@ public final class SelfTest {
         testPredictor();
         testCompression();
         testQuality();
+        testSubtick();
+        testVoiceEngine();
+        testRenderContinuous();
+        testRenderRates();
+        testGameFactories();
         testTransport();
         testFloodProtection();
         testAutoReconnect();
@@ -308,6 +317,205 @@ public final class SelfTest {
         check("jitter lowers the score", Connection.score(30, 40, 0) < 95,
                 "score=" + Connection.score(30, 40, 0));
         check("score stays in range", Connection.score(9999, 9999, 100) == 0);
+    }
+
+    private static void testSubtick() throws Exception {
+        System.out.println("[subtick]");
+        check("sub clamps above 1", new InputCommand(1, 1, 5f, 0).sub == 1f);
+        check("sub clamps below 0", new InputCommand(1, 1, -5f, 0).sub == 0f);
+        check("sub keeps the fraction", Math.abs(new InputCommand(1, 1, 0.375f, 0).sub - 0.375f) < 1e-6f);
+
+        GameConfig cfg = new GameConfig();
+        cfg.applySize(0);
+        cfg.cellsPerSec = 2;
+        cfg.tickRate = 64;
+        cfg.subtick = true;
+        cfg.subSteps = 4;
+        cfg.walls = false;
+        check("config produces subtick ticks",
+                cfg.tickConfig().isSubtick() && cfg.tickConfig().subSteps() == 4);
+        GameConfig copy = GameConfig.read(cfg.write(Msg.of("T")), new GameConfig());
+        check("subtick survives serialisation", copy.subtick && copy.subSteps == 4);
+
+        GameServer server = new GameServer(0, "Test", cfg);
+        server.start();
+        Collect c = new Collect();
+        c.client = GameClient.connect("127.0.0.1", server.port(), c);
+        c.client.send(Msg.of(Protocol.HELLO).putStr("name", "Sub").put("color", 0).putStr("token", "sub-tok"));
+        check("subtick client joined", waitFor(() -> c.last(Protocol.WELCOME) != null, 3000));
+        int pid = c.last(Protocol.WELCOME) == null ? -1 : c.last(Protocol.WELCOME).num("pid", -1);
+
+        c.client.send(Msg.of(Protocol.START));
+        check("subtick round started", waitFor(() -> c.last(Protocol.SNAP) != null, 8000));
+
+        Msg first = c.last(Protocol.SNAP);
+        int firstTick = first == null ? 1 : first.num("t", 1);
+        int dir = c.snakeDir(pid);
+        int target = Math.floorMod(dir + 1, 4);
+        int alt = Math.floorMod(dir + 3, 4);
+        int at = firstTick + 8;
+        c.client.send(Msg.of(Protocol.IN).put("d", target).put("t", at).put("s", "0.950").put("n", 1));
+        c.client.send(Msg.of(Protocol.IN).put("d", alt).put("t", at).put("s", "0.150").put("n", 2));
+
+        check("same-tick inputs arrived", waitFor(() -> {
+            Msg s = c.last(Protocol.SNAP);
+            return s != null && s.num("t", 0) >= at && s.num("si", 0) >= 2;
+        }, 4000));
+        Msg s = c.last(Protocol.SNAP);
+        check("server reports subtick mode", s != null && s.num("se", 0) == 1 && s.num("ss", 0) == 4);
+        check("both sub inputs received", s != null && s.num("si", 0) >= 2,
+                s == null ? "no snapshot" : "in=" + s.num("si", 0));
+        check("same-tick inputs merged", s != null && s.num("sm", 0) >= 1 && s.num("sx", 0) >= 1,
+                s == null ? "no snapshot" : "merged=" + s.num("sm", 0) + " same=" + s.num("sx", 0));
+        check("sub ordering has no errors", s != null && s.num("so", 0) == 0,
+                s == null ? "no snapshot" : "errors=" + s.num("so", 0));
+        check("bucket histogram is reported", s != null && s.raw("sb").split(",").length == 4,
+                s == null ? "no snapshot" : s.raw("sb"));
+        check("higher sub wins the turn", waitFor(() -> c.snakeDir(pid) == target, 4000),
+                "dir=" + c.snakeDir(pid) + ", expected " + target);
+
+        Msg latest = c.last(Protocol.SNAP);
+        int next = (latest == null ? at : latest.num("t", at)) + 6;
+        c.client.send(Msg.of(Protocol.IN).put("d", target).put("t", next).put("s", "oops").put("n", 3));
+        check("malformed sub does not break the server", waitFor(() -> {
+            Msg x = c.last(Protocol.SNAP);
+            return x != null && x.num("t", 0) > next;
+        }, 3000) && c.client.isOpen());
+
+        c.client.close();
+        server.stop();
+    }
+
+    private static void testVoiceEngine() {
+        System.out.println("[engine: voice]");
+        VoiceConfig cfg = new VoiceConfig().withJitter(2, 6, false).withLimits(640, 60, 96_000);
+        VoiceJitterBuffer buffer = new VoiceJitterBuffer(cfg);
+        short[] pcm = new short[320];
+        long t = 1_000_000_000L;
+        buffer.push(10, pcm, t);
+        check("jitter waits for target", buffer.poll(t + 20_000_000L) == null);
+        buffer.push(11, pcm, t + 20_000_000L);
+        short[] first = buffer.poll(t + 40_000_000L);
+        check("jitter releases in order", first != null && buffer.played() == 1);
+        check("duplicate voice frame rejected", !buffer.push(11, pcm, t + 60_000_000L));
+        check("late voice frame rejected", !buffer.push(9, pcm, t + 60_000_000L));
+        buffer.push(13, pcm, t + 80_000_000L);
+        short[] next = buffer.poll(t + 100_000_000L);
+        short[] concealed = buffer.poll(t + 120_000_000L);
+        check("gap is concealed", next != null && concealed != null && buffer.concealed() >= 1);
+
+        VoiceGuard guard = new VoiceGuard(cfg);
+        check("voice guard accepts first frame", guard.accept(1, pcm, t));
+        check("voice guard rejects duplicate", !guard.accept(1, pcm, t + 20_000_000L));
+        check("voice guard rejects oversized", !guard.accept(2, new short[4000], t + 40_000_000L));
+        boolean intervalRejected = !guard.accept(3, pcm, t + 1_000_000L);
+        check("voice guard enforces frame spacing", intervalRejected);
+
+        VoiceConfig limited = new VoiceConfig().withJitter(1, 4, false).withLimits(640, 4, 96_000);
+        VoiceGuard burst = new VoiceGuard(limited);
+        int accepted = 0;
+        long now = 2_000_000_000L;
+        for (int i = 0; i < 8; i++) {
+            if (burst.accept(i + 1, pcm, now + i * 20_000_000L)) accepted++;
+        }
+        check("voice guard enforces packet rate", accepted == 4, "accepted " + accepted);
+        check("voice stats expose rejects", guard.rejected() > 0 && burst.rejectedRate() > 0);
+    }
+
+    private static void testRenderContinuous() {
+        System.out.println("[render continuity]");
+        int[] xs = {5, 4, 3};
+        int[] ys = {5, 5, 5};
+        double[] at0 = snakenet.client.SnakeRenderMath.pointsAt(xs, ys, SnakeState.RIGHT, 0, 0);
+        double[] at1 = snakenet.client.SnakeRenderMath.pointsAt(xs, ys, SnakeState.RIGHT, 0, SnakeState.UNITS);
+        double[] at15 = snakenet.client.SnakeRenderMath.pointsAt(xs, ys, SnakeState.RIGHT, 0, SnakeState.UNITS * 1.5);
+        check("continuous render starts in cell", Math.abs(at0[0] - 5) < 1e-6);
+        check("continuous render crosses one cell", Math.abs(at1[0] - 6) < 1e-6);
+        check("continuous render keeps a fraction", Math.abs(at15[0] - 6.5) < 1e-6,
+                "x=" + at15[0]);
+        check("continuous render keeps body attached", Math.abs(at15[2] - 5.5) < 1e-6,
+                "body=" + at15[2]);
+    }
+
+    private static void testRenderRates() {
+        System.out.println("[render at 16 and 32 Hz]");
+        for (int rate : new int[]{16, 32}) {
+            int units = Math.round(9 * 1024f / rate);
+            List<int[]> xs = new ArrayList<>();
+            List<int[]> ys = new ArrayList<>();
+            List<Integer> acc = new ArrayList<>();
+            int[] x = {5, 4, 3, 2};
+            int[] y = {5, 5, 5, 5};
+            int a = 0;
+            xs.add(x.clone());
+            ys.add(y.clone());
+            acc.add(a);
+            for (int k = 1; k <= 40; k++) {
+                a += units;
+                if (a >= 1024) {
+                    a -= 1024;
+                    for (int i = x.length - 1; i > 0; i--) {
+                        x[i] = x[i - 1];
+                        y[i] = y[i - 1];
+                    }
+                    x[0]++;
+                }
+                xs.add(x.clone());
+                ys.add(y.clone());
+                acc.add(a);
+            }
+            double prev = Double.NaN;
+            double maxJump = 0;
+            for (int frame = 0; frame <= 60; frame++) {
+                double pos = frame / 60.0 * rate;
+                int tick = Math.min(xs.size() - 1, (int) Math.floor(pos));
+                double sub = pos - Math.floor(pos);
+                double[] pts = snakenet.client.SnakeRenderMath.pointsAt(
+                        xs.get(tick), ys.get(tick), SnakeState.RIGHT, acc.get(tick), units * sub);
+                if (!Double.isNaN(prev)) maxJump = Math.max(maxJump, Math.abs(pts[0] - prev));
+                prev = pts[0];
+            }
+            check(rate + " Hz render has no jumps", maxJump < 0.3,
+                    "max jump " + String.format(java.util.Locale.ROOT, "%.3f", maxJump) + " cells per frame");
+            check(rate + " Hz render keeps speed", Math.abs(prev - 5 - 9) < 1.0,
+                    "travelled " + String.format(java.util.Locale.ROOT, "%.2f", prev - 5) + " cells");
+        }
+    }
+
+    private static void testGameFactories() {
+        System.out.println("[game: tuning factories]");
+        GameConfig cfg = new GameConfig();
+        cfg.preciseSpin = false;
+        cfg.maxCatchUp = 2;
+        cfg.spinWindowMicros = 500;
+        cfg.tickPriority = Thread.NORM_PRIORITY;
+        cfg.predictionSnap = 3.5;
+        cfg.predictionHistory = 24;
+        cfg.maxAdvanceTicks = 12;
+        cfg.interpolationDelayMs = 90;
+        cfg.voiceMode = 1;
+        cfg.voiceJitterTarget = 2;
+        cfg.voiceJitterMax = 7;
+
+        TickConfig tick = cfg.tickConfig();
+        check("game controls spin", !tick.precise());
+        check("game controls catch-up", tick.maxCatchUp() == 2);
+        check("game controls spin window", tick.spinWindowNanos() == 500_000L);
+        check("game controls tick priority", tick.threadPriority() == Thread.NORM_PRIORITY);
+
+        PredictionConfig prediction = cfg.predictionConfig();
+        check("game controls prediction snap", prediction.snapThreshold() == 3.5);
+        check("game controls prediction history", prediction.historyTicks() == 24);
+        check("game controls prediction lead", prediction.maxAdvanceTicks() == 12);
+        check("game controls interpolation delay", prediction.interpolationDelayMs() == 90);
+
+        VoiceConfig voice = cfg.voiceConfig();
+        check("game controls voice mode", voice.mode() == VoiceMode.WEBRTC);
+        check("game controls voice jitter", voice.jitterTargetFrames() == 2 && voice.jitterMaxFrames() == 7);
+
+        NetConfig net = cfg.netConfig(true);
+        check("game controls transport mtu", net.mtu() == cfg.mtu);
+        check("game controls voice budget", net.voicePacketsPerSec() == cfg.voiceMaxPacketsPerSec);
     }
 
     private static void testTransport() throws Exception {
@@ -646,6 +854,13 @@ public final class SelfTest {
         Msg m = c.write(Msg.of("T"));
         GameConfig back = GameConfig.read(m, new GameConfig());
         check("serialisation", back.cols == 40 && back.tickRate == 128 && back.cellsPerSec == 15);
+        c.voice = false;
+        c.voiceMode = 1;
+        c.voiceJitterTarget = 2;
+        c.voiceJitterMax = 6;
+        GameConfig voiceBack = GameConfig.read(c.write(Msg.of("T")), new GameConfig());
+        check("voice settings serialise", !voiceBack.voice && voiceBack.voiceMode == 1
+                && voiceBack.voiceJitterTarget == 2 && voiceBack.voiceJitterMax == 6);
         check("name is sanitised", GameConfig.sanitizeName("  Ва\u0007ся   Пупкин  ").equals("Вася Пупкин"));
         check("name fits 16 chars", GameConfig.sanitizeName("а".repeat(50)).length() == 16);
     }
@@ -661,7 +876,7 @@ public final class SelfTest {
         }
 
         @Override
-        public void onVoice(int playerId, short[] pcm) {
+        public void onVoice(int playerId, int sequence, short[] pcm) {
         }
 
         @Override
@@ -725,6 +940,15 @@ public final class SelfTest {
             return set;
         }
 
+        int snakeDir(int playerId) {
+            List<Msg> frame = lastFrameWith(Protocol.SNAP);
+            if (frame == null) return -1;
+            for (Msg m : frame) {
+                if (m.is(Protocol.SNAKE) && m.num("p", -1) == playerId) return m.num("d", -1);
+            }
+            return -1;
+        }
+
         int maxTick() {
             int max = 0;
             synchronized (frames) {
@@ -783,6 +1007,7 @@ public final class SelfTest {
 
         int pid = host.last(Protocol.WELCOME).num("pid", -1);
         int tick = host.last(Protocol.SNAP) == null ? 1 : host.last(Protocol.SNAP).num("t", 1);
+        host.frames.clear();
         host.client.send(Msg.of(Protocol.IN).put("d", 0).put("t", tick + 4).put("s", 0.5).put("n", 1));
         check("input works in the second round", waitFor(() -> hasAck(host, pid, 1), 4000));
 

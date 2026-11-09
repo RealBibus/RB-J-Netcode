@@ -5,6 +5,28 @@ public final class Connection {
     private static final int PING_WINDOW = 48;
     private static final long LOSS_AGE_NANOS = 1_500_000_000L;
 
+    private static final class Bucket {
+        private long windowNanos;
+        private int packets;
+        private long bytes;
+        private long dropped;
+
+        boolean allow(int packetBytes, int maxPackets, int maxBytes, long now) {
+            if (now - windowNanos > 1_000_000_000L) {
+                windowNanos = now;
+                packets = 0;
+                bytes = 0;
+            }
+            packets++;
+            bytes += Math.max(0, packetBytes);
+            if (packets > maxPackets || bytes > maxBytes) {
+                dropped++;
+                return false;
+            }
+            return true;
+        }
+    }
+
     private final int id;
     private final NetConfig config;
     private volatile Transport transport;
@@ -20,9 +42,9 @@ public final class Connection {
     private final boolean[] pingOk = new boolean[PING_WINDOW];
     private int pingSlot;
 
-    private long rateWindowNanos;
-    private int ratePackets;
-    private long rateBytes;
+    private final Bucket dataBucket = new Bucket();
+    private final Bucket controlBucket = new Bucket();
+    private final Bucket voiceBucket = new Bucket();
     private long dropped;
 
     public volatile Object attachment;
@@ -67,6 +89,18 @@ public final class Connection {
 
     public long droppedPackets() {
         return dropped;
+    }
+
+    public long droppedVoicePackets() {
+        return voiceBucket.dropped;
+    }
+
+    public long droppedDataPackets() {
+        return dataBucket.dropped;
+    }
+
+    public long droppedControlPackets() {
+        return controlBucket.dropped;
     }
 
     void onPingSent(long sentNanos) {
@@ -128,21 +162,33 @@ public final class Connection {
         return Math.max(0, Math.min(100, q));
     }
 
+    boolean allowIncoming(Packet packet) {
+        long now = System.nanoTime();
+        int bytes = packet.payload.length;
+        synchronized (this) {
+            boolean allowed;
+            if (packet.type == Packet.VOICE) {
+                allowed = voiceBucket.allow(bytes, config.voicePacketsPerSec(),
+                        config.voiceBytesPerSec(), now);
+            } else if (packet.isControl()) {
+                allowed = controlBucket.allow(bytes, config.controlPacketsPerSec(),
+                        config.controlBytesPerSec(), now);
+            } else {
+                allowed = dataBucket.allow(bytes, config.maxPacketsPerSec(),
+                        config.maxBytesPerSec(), now);
+            }
+            if (!allowed) dropped++;
+            return allowed;
+        }
+    }
+
     boolean allowIncoming(int bytes) {
         long now = System.nanoTime();
         synchronized (this) {
-            if (now - rateWindowNanos > 1_000_000_000L) {
-                rateWindowNanos = now;
-                ratePackets = 0;
-                rateBytes = 0;
-            }
-            ratePackets++;
-            rateBytes += Math.max(0, bytes);
-            if (ratePackets > config.maxPacketsPerSec() || rateBytes > config.maxBytesPerSec()) {
-                dropped++;
-                return false;
-            }
-            return true;
+            boolean allowed = dataBucket.allow(bytes, config.maxPacketsPerSec(),
+                    config.maxBytesPerSec(), now);
+            if (!allowed) dropped++;
+            return allowed;
         }
     }
 
@@ -153,6 +199,11 @@ public final class Connection {
     public void send(byte[] payload, boolean reliable) {
         Transport t = transport;
         if (t != null) t.send(new Packet(Packet.DATA, 0, payload, reliable));
+    }
+
+    public void sendVoice(byte[] payload) {
+        Transport t = transport;
+        if (t != null) t.send(new Packet(Packet.VOICE, 0, payload, false));
     }
 
     public void sendPacket(byte type, byte[] payload) {

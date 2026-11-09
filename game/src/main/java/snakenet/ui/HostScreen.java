@@ -65,7 +65,7 @@ public final class HostScreen extends Screen {
             walls = !walls;
             syncChips();
         }));
-        bSubtick = add(new NeonButton("subtick ×4", NeonButton.Style.CHIP, 930, 486, 160, 44, () -> {
+        bSubtick = add(new NeonButton("subtick", NeonButton.Style.CHIP, 930, 486, 160, 44, () -> {
             subtick = !subtick;
             syncChips();
         }));

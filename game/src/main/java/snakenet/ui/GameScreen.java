@@ -2,7 +2,6 @@ package snakenet.ui;
 
 import netcore.predict.Correction;
 import netcore.predict.InputCommand;
-import netcore.predict.PredictionConfig;
 import netcore.predict.Predictor;
 import netcore.sync.ClockSync;
 import snakenet.audio.Sfx;
@@ -163,6 +162,12 @@ public final class GameScreen extends Screen {
     private long lastSnapSt;
     private double lastReconPeak = 4;
 
+    private boolean subDebug;
+    private int subSent;
+    private int[] subSentBuckets = new int[16];
+    private float subLastSent = -1f;
+    private long lastSubLogNanos;
+
     private double cell = 28;
     private double boardX = 56;
     private double boardY = 112;
@@ -243,6 +248,13 @@ public final class GameScreen extends Screen {
                 }
             }
         });
+        getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("F3"), "subdebug");
+        getActionMap().put("subdebug", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                toggleSubDebug();
+            }
+        });
         getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("pressed K"), "ptt_on");
         getActionMap().put("ptt_on", new AbstractAction() {
             @Override
@@ -267,6 +279,24 @@ public final class GameScreen extends Screen {
         } else {
             openTab(which);
         }
+    }
+
+    private void toggleSubDebug() {
+        subDebug = !subDebug;
+        if (subDebug) {
+            int steps = Math.max(1, cfg.subSteps);
+            app.log("subtick debug on: " + (cfg.subtick ? "on" : "off")
+                    + ", tick rate " + cfg.tickRate + " Hz"
+                    + ", input slots " + (cfg.subtick ? cfg.tickRate * steps : cfg.tickRate) + "/s");
+            app.toast("Subtick debug ON · F3 to hide");
+        } else {
+            app.log("subtick debug off");
+        }
+    }
+
+    public void setPreviewSubtick(int sent, float lastSub) {
+        subSent = Math.max(0, sent);
+        subLastSent = lastSub;
     }
 
     private void openTab(int which) {
@@ -436,7 +466,7 @@ public final class GameScreen extends Screen {
         shake = 0;
         pauseMenu = false;
         predictor = new Predictor<>(new SnakePredictState.Model(cols, rows, cfg.unitsPerTick(), cfg.walls),
-                PredictionConfig.of(2.2));
+                cfg.predictionConfig());
         predicted = null;
         localRender = null;
         localDelta = null;
@@ -447,7 +477,7 @@ public final class GameScreen extends Screen {
         snapshotIntervalMs = 1000.0 / Math.min(cfg.tickRate, 30);
         lastSnapRecv = 0;
         renderClockInit = false;
-        interpDelayMs = 66;
+        interpDelayMs = cfg.interpolationDelayMs;
         snapshotGapMs = 1000.0 / Math.min(cfg.tickRate, 30);
         lastSnapSt = 0;
         serverClock.onSnapshot(0, 0, cfg.tickRate, System.nanoTime());
@@ -463,8 +493,12 @@ public final class GameScreen extends Screen {
         telemetryBytesOut = 0;
         rttPrev = -1;
         jitter = 0;
+        subSent = 0;
+        subLastSent = -1f;
+        java.util.Arrays.fill(subSentBuckets, 0);
+        lastSubLogNanos = 0;
         app.log("round started: " + cols + "×" + rows + ", " + cfg.cellsPerSec + " cells/s, "
-                + cfg.tickRate + " Hz" + (cfg.subtick ? ", subtick ×" + cfg.subSteps : ""));
+                + cfg.tickRate + " Hz" + (cfg.subtick ? ", subtick" : ""));
         Sfx.play(Sfx.Sound.START);
     }
 
@@ -484,7 +518,9 @@ public final class GameScreen extends Screen {
         if (lastSnapSt != 0) {
             double gap = (snap.serverNanos - lastSnapSt) / 1_000_000.0;
             if (gap > 3 && gap < 250) snapshotGapMs = snapshotGapMs * 0.85 + gap * 0.15;
-            interpDelayMs = Math.max(40, Math.min(220, snapshotGapMs * 1.6 + 12));
+            double tickMs = 1000.0 / Math.max(1, cfg.tickRate);
+            interpDelayMs = Math.max(cfg.interpolationDelayMs,
+                    Math.min(tickMs * 6.0, snapshotGapMs * 1.6 + tickMs * 0.4));
         }
         lastSnapSt = snap.serverNanos;
         prev = cur;
@@ -493,6 +529,19 @@ public final class GameScreen extends Screen {
         snapHistory.addLast(snap);
         while (snapHistory.size() > 12) snapHistory.removeFirst();
         serverClock.onSnapshot(snap.tick, snap.serverNanos, snap.tickRate, snap.recvNanos);
+
+        if (subDebug && now - lastSubLogNanos > 1_000_000_000L) {
+            lastSubLogNanos = now;
+            app.log("sub: " + (snap.subtick ? "timestamps" : "off")
+                    + " in=" + snap.subIn
+                    + " applied=" + snap.subApplied
+                    + " merged=" + snap.subMerged
+                    + " same-tick=" + snap.subSameTick
+                    + " order=" + (snap.subOrderErrors == 0 ? "ok" : "ERR" + snap.subOrderErrors)
+                    + " last=" + (snap.subIn == 0 ? "—" : String.format(java.util.Locale.ROOT, "%.3f", snap.subLastPermille / 1000.0))
+                    + " buckets=" + bucketText(snap.subBuckets)
+                    + " sent=" + subSent);
+        }
 
         reconcile(snap);
 
@@ -535,13 +584,26 @@ public final class GameScreen extends Screen {
         float sub = (float) serverClock.subAt(clock);
         InputCommand command = predictor.push(dir, tick, sub);
         if (command == null) return;
+        long stamp = serverClock.timeOfTickNanos(command.tick, command.sub, clock);
         predicted = predictor.predicted();
         sentTicks.put(command.seq, command.tick);
+        subSent++;
+        subLastSent = command.sub;
+        int bucket = (int) (command.sub * Math.max(1, cfg.subSteps));
+        bucket = Math.max(0, Math.min(Math.max(1, cfg.subSteps) - 1, bucket));
+        subSentBuckets[bucket]++;
+        if (subDebug) {
+            String name = dir >= 0 && dir < SnakeState.DIR_NAMES.length ? SnakeState.DIR_NAMES[dir] : String.valueOf(dir);
+            app.log("IN #" + command.seq + " t=" + command.tick
+                    + " sub=" + String.format(java.util.Locale.ROOT, "%.3f", command.sub)
+                    + " dir=" + name);
+        }
         app.send(Msg.of(Protocol.IN)
                 .put("d", dir)
                 .put("t", command.tick)
                 .put("s", String.format(java.util.Locale.ROOT, "%.3f", command.sub))
-                .put("n", command.seq));
+                .put("n", command.seq)
+                .put("ts", stamp));
     }
 
     private void handleEvent(Snapshot.EventView e) {
@@ -737,6 +799,7 @@ public final class GameScreen extends Screen {
         paintBoard(board);
         board.dispose();
         paintChatHud(g);
+        if (subDebug && !panelOpen && !pauseMenu) paintSubtickDebug(g);
         paintOverlays(g);
         if (panelOpen) paintPanel(g);
     }
@@ -772,9 +835,43 @@ public final class GameScreen extends Screen {
                     y += lineH;
                 }
             }
-            Brush.text(g, "ENTER — CHAT    TAB — PANEL    K — VOICE", 16, VH - 10,
+            Brush.text(g, "ENTER — CHAT    TAB — PANEL    K — VOICE    F3 — SUBTICK", 16, VH - 10,
                     Theme.font(9), Theme.MUTED);
         }
+    }
+
+    private void paintSubtickDebug(Graphics2D g) {
+        double x = 12;
+        double y = 48;
+        double w = 356;
+        double h = 78;
+        Brush.panel(g, x, y, w, h, 10);
+        g.setColor(Theme.alpha(Theme.ACCENT2, 140));
+        g.fill(new Rectangle2D.Double(x, y + 8, 2, h - 16));
+
+        int steps = Math.max(1, cfg.subSteps);
+        double pos = renderSub;
+        int srvIn = cur == null ? 0 : cur.subIn;
+        int srvApplied = cur == null ? 0 : cur.subApplied;
+        int srvMerged = cur == null ? 0 : cur.subMerged;
+        int srvSame = cur == null ? 0 : cur.subSameTick;
+        int srvOrder = cur == null ? 0 : cur.subOrderErrors;
+        int lastPermille = cur == null || cur.subIn == 0 ? -1 : cur.subLastPermille;
+
+        Brush.text(g, "SUBTICK " + (cfg.subtick ? "ON" : "OFF") + "   ·   F3", x + 12, y + 19,
+                Theme.semibold(11), Theme.ACCENT2);
+        Brush.text(g, "tick " + (cur == null ? "—" : cur.tick) + "."
+                        + String.format(java.util.Locale.ROOT, "%.2f", pos)
+                        + "   sent " + subSent
+                        + "   last " + (subLastSent < 0 ? "—"
+                        : String.format(java.util.Locale.ROOT, "%.3f", subLastSent)),
+                x + 12, y + 37, Theme.font(10), Theme.DIM);
+        Brush.text(g, "server in " + srvIn + "   applied " + srvApplied + "   merged " + srvMerged,
+                x + 12, y + 55, Theme.font(10), Theme.DIM);
+        Brush.text(g, "same tick " + srvSame + "   order " + (srvOrder == 0 ? "ok" : "ERR " + srvOrder)
+                        + "   last " + (lastPermille < 0 ? "—"
+                        : String.format(java.util.Locale.ROOT, "%.3f", lastPermille / 1000.0)),
+                x + 12, y + 73, Theme.font(10), Theme.DIM);
     }
 
     
@@ -927,10 +1024,12 @@ public final class GameScreen extends Screen {
 
         double statsY = y + (h + gap) * 3 + 4;
         String protocol = app.client() == null ? "—" : app.client().protocol();
+        String voiceBackend = app.voice() == null ? "off" : app.voice().backend();
         String stats = "PROTOCOL " + protocol
                 + "   PACKETS " + packetsIn() + "/" + packetsOut()
                 + "   TRAFFIC " + kbTotalIn() + "/" + kbTotalOut() + " KB"
-                + "   RATE " + cfg.tickRate + " Hz";
+                + "   RATE " + cfg.tickRate + " Hz"
+                + "   VOICE " + voiceBackend;
         Brush.text(g, stats, x, statsY, Theme.font(11), Theme.DIM);
         int rtt = app.client() == null ? -1 : app.client().rttMs();
         int loss = app.client() == null ? 0 : app.client().lossPercent();
@@ -945,6 +1044,64 @@ public final class GameScreen extends Screen {
                 + "   RESETS " + snaps
                 + "   INTERP " + Math.round(interpDelayMs) + " ms";
         Brush.text(g, stats3, x, statsY + 36, Theme.font(11), Theme.DIM);
+
+        int steps = Math.max(1, cur == null ? cfg.subSteps : cur.subSteps);
+        boolean subOn = cur == null ? cfg.subtick : cur.subtick;
+        int srvIn = cur == null ? 0 : cur.subIn;
+        int srvApplied = cur == null ? 0 : cur.subApplied;
+        int srvMerged = cur == null ? 0 : cur.subMerged;
+        int srvSame = cur == null ? 0 : cur.subSameTick;
+        int srvOrder = cur == null ? 0 : cur.subOrderErrors;
+        int lastPermille = cur == null ? -1 : (cur.subIn == 0 ? -1 : cur.subLastPermille);
+
+        String stats4 = "SUBTICK " + (subOn ? "ON" : "OFF")
+                + "   SENT " + subSent
+                + "   SRV IN " + srvIn
+                + "   APPLIED " + srvApplied
+                + "   MERGED " + srvMerged;
+        Brush.text(g, stats4, x, statsY + 54, Theme.font(11), subOn ? Theme.ACCENT2 : Theme.DIM);
+        String stats5 = "SAME TICK " + srvSame
+                + "   ORDER " + (srvOrder == 0 ? "OK" : "ERR " + srvOrder)
+                + "   LAST SUB " + (lastPermille < 0 ? "—"
+                : String.format(java.util.Locale.ROOT, "%.3f", lastPermille / 1000.0))
+                + "   IN DROP " + (cur == null ? 0 : cur.inputDropped)
+                + "   VOICE " + (cur == null ? 0 : cur.voiceAccepted)
+                + "/" + (cur == null ? 0 : cur.voiceRejected);
+        Brush.text(g, stats5, x, statsY + 72, Theme.font(11), Theme.DIM);
+        if (subOn) paintSubBuckets(g, x, statsY + 92, steps);
+    }
+
+    private static String bucketText(int[] buckets) {
+        if (buckets == null || buckets.length == 0) return "—";
+        StringBuilder sb = new StringBuilder(buckets.length * 3);
+        for (int i = 0; i < buckets.length; i++) {
+            if (i > 0) sb.append('/');
+            sb.append(buckets[i]);
+        }
+        return sb.toString();
+    }
+
+    private void paintSubBuckets(Graphics2D g, double x, double y, int steps) {
+        int n = Math.max(1, Math.min(16, steps));
+        int[] counts = cur == null ? new int[0] : cur.subBuckets;
+        int max = 1;
+        for (int i = 0; i < n && i < counts.length; i++) max = Math.max(max, counts[i]);
+        double gap = 4;
+        double bw = Math.min(52, (PANEL_INNER_W - gap * (n - 1)) / n);
+        for (int i = 0; i < n; i++) {
+            double bx = x + i * (bw + gap);
+            int count = i < counts.length ? counts[i] : 0;
+            double bh = 16.0 * count / max;
+            g.setColor(new Color(0x1B, 0x22, 0x2C, 160));
+            g.fill(new RoundRectangle2D.Double(bx, y, bw, 16, 3, 3));
+            g.setColor(Theme.alpha(Theme.ACCENT2, 120));
+            g.fill(new RoundRectangle2D.Double(bx, y + 16 - Math.max(1, bh), bw, Math.max(1, bh), 3, 3));
+            Brush.text(g, String.valueOf(count), bx + 3, y + 11, Theme.font(9), Theme.TEXT);
+            if (n <= 8) {
+                Brush.text(g, String.format(java.util.Locale.ROOT, "%.2f", (i + 0.5) / n),
+                        bx + bw - 18, y + 26, Theme.font(9), Theme.MUTED);
+            }
+        }
     }
 
     private long packetsIn() {
@@ -1025,7 +1182,7 @@ public final class GameScreen extends Screen {
         g.fill(new Ellipse2D.Double(119, 17, 6, 6));
 
         String info = cols + "×" + rows + "  ·  " + cfg.cellsPerSec + " cells/s  ·  " + cfg.tickRate + " Hz"
-                + (cfg.subtick ? " · subtick ×" + cfg.subSteps : "") + "  ·  "
+                + (cfg.subtick ? " · subtick" : "") + "  ·  "
                 + (cfg.walls ? "walls" : "wrap")
                 + (app.client() == null ? "" : "  ·  " + app.client().protocol());
         Brush.text(g, info, 136, 27, Theme.font(11), Theme.MUTED);
@@ -1153,31 +1310,23 @@ public final class GameScreen extends Screen {
         Snapshot last = snapHistory.peekLast();
         if (snapHistory.size() == 1) return viewPoints(first, snakeId);
 
-        Snapshot before = null;
-        Snapshot after = null;
+        Snapshot base = null;
         for (Snapshot s : snapHistory) {
-            if (s.serverNanos <= renderServerNanos) before = s;
-            else {
-                after = s;
-                break;
-            }
+            if (s.serverNanos <= renderServerNanos) base = s;
+            else break;
         }
-
-        if (before == null) return viewPoints(first, snakeId);
-
-        if (after == null) {
-            
-            Snapshot prev = secondLastSnapshot();
-            if (prev == null || last.serverNanos <= prev.serverNanos) return viewPoints(last, snakeId);
-            double phase = (renderServerNanos - last.serverNanos)
-                    / (double) (last.serverNanos - prev.serverNanos);
-            return blendViews(prev, last, snakeId, Math.max(0, Math.min(1.5, phase)));
+        if (base == null) base = first;
+        Snapshot.SnakeView v = base.snake(snakeId);
+        if (v == null || v.length() == 0) {
+            v = last.snake(snakeId);
+            base = last;
         }
-
-        double span = after.serverNanos - before.serverNanos;
-        if (span <= 0) return viewPoints(after, snakeId);
-        double phase = (renderServerNanos - before.serverNanos) / span;
-        return blendViews(before, after, snakeId, Math.max(0, Math.min(1, phase)));
+        if (v == null || v.length() == 0) return null;
+        double npt = 1_000_000_000.0 / Math.max(1, cfg.tickRate);
+        double phase = (renderServerNanos - base.serverNanos) / npt;
+        phase = Math.max(0, Math.min(3, phase));
+        double ahead = cfg.unitsPerTick() * phase;
+        return SnakeRenderMath.pointsAt(v.xs, v.ys, v.dir, v.acc, ahead);
     }
 
     private Snapshot secondLastSnapshot() {
@@ -1308,7 +1457,7 @@ public final class GameScreen extends Screen {
         }
         if (localDelta == null) {
             double jump = maxDistance(localRender, target);
-            if (jump > 0.45 && jump < 6) {
+            if (jump > 0.45 && jump < 3.0) {
                 localDelta = new double[target.length];
                 for (int i = 0; i < target.length; i++) localDelta[i] = localRender[i] - target[i];
                 localBlend = 0;
@@ -1317,12 +1466,17 @@ public final class GameScreen extends Screen {
             }
         }
         if (localDelta != null) {
-            localBlend = Math.min(1, localBlend + dt / 0.09);
-            double k = 1 - localBlend * (2 - localBlend);
+            double smooth = Math.max(0.016, cfg.predictionSmoothMs / 1000.0);
+            localBlend = Math.min(1, localBlend + dt / smooth);
+            double k = 1 - localBlend;
+            if (cfg.nonlinearInterp) k = k * k * (3 - 2 * k);
             for (int i = 0; i < target.length && i < localDelta.length; i++) {
                 localRender[i] = target[i] + localDelta[i] * k;
             }
-            if (localBlend >= 1) localDelta = null;
+            if (localBlend >= 1) {
+                localDelta = null;
+                System.arraycopy(target, 0, localRender, 0, target.length);
+            }
         }
     }
 
@@ -1332,16 +1486,13 @@ public final class GameScreen extends Screen {
         for (int i = 0; i < n; i++) max = Math.max(max, Math.abs(a[i] - b[i]));
         return max;
     }
-    
+
     private double[] computePredictedPoints() {
-        SnakePredictState a = predictor == null ? null : predictor.stateAt(renderTick - 1);
         SnakePredictState b = predictor == null ? null : predictor.stateAt(renderTick);
         if (b == null) b = predicted;
         if (b == null || b.length() == 0) return null;
-        double[] pb = SnakeRenderMath.points(b.xs, b.ys, b.dir, b.acc, 0);
-        if (a == null || a.length() != b.length()) return pb;
-        double[] pa = SnakeRenderMath.points(a.xs, a.ys, a.dir, a.acc, 0);
-        return SnakeRenderMath.blend(pa, pb, renderSub);
+        double ahead = cfg.unitsPerTick() * Math.max(0, Math.min(1.5, renderSub));
+        return SnakeRenderMath.pointsAt(b.xs, b.ys, b.dir, b.acc, ahead);
     }
 
     private void paintParticles(Graphics2D g) {

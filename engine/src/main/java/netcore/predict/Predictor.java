@@ -84,9 +84,9 @@ public final class Predictor<S> {
     public synchronized S advanceTo(int tick) {
         if (predicted == null) return null;
         if (tick <= predictedTick) return predicted;
-        if (tick - predictedTick > 64) {
+        if (tick - predictedTick > config.maxAdvanceTicks()) {
             
-            tick = predictedTick + 64;
+            tick = predictedTick + config.maxAdvanceTicks();
         }
         while (predictedTick < tick) {
             predictedTick++;

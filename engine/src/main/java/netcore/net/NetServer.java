@@ -172,7 +172,8 @@ public final class NetServer implements AutoCloseable {
                 break;
             }
             SocketAddress from = datagram.getSocketAddress();
-            if (datagram.getLength() >= 1 && buffer[0] == UdpPeer.T_CONNECT) {
+            if (datagram.getLength() < 1 || datagram.getLength() > config.maxDatagramBytes()) continue;
+            if (buffer[0] == UdpPeer.T_CONNECT) {
                 acceptUdp(from);
                 continue;
             }
@@ -244,7 +245,8 @@ public final class NetServer implements AutoCloseable {
 
     private void handlePacket(Connection connection, Packet packet) {
         if (connection == null) return;
-        if (!connection.allowIncoming(packet.payload.length)) return;
+        if (packet.payload.length > config.maxDatagramBytes()) return;
+        if (!connection.allowIncoming(packet)) return;
         if (packet.type == Packet.PING) {
             long clientNanos = packet.payload.length >= 8
                     ? ByteBuffer.wrap(packet.payload).getLong() : 0L;
@@ -254,7 +256,7 @@ public final class NetServer implements AutoCloseable {
             connection.sendPacket(Packet.PONG, reply.array());
             return;
         }
-        if (packet.type == Packet.DATA) {
+        if (packet.type == Packet.DATA || packet.type == Packet.VOICE) {
             listener.onMessage(connection, packet.payload);
             return;
         }

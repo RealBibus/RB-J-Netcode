@@ -155,7 +155,7 @@ public final class NetClient implements Transport.Listener, AutoCloseable {
                             }
                         }
                     }
-                    Thread.sleep(300);
+                    Thread.sleep(config.heartbeatMs());
                 } catch (InterruptedException e) {
                     return;
                 } catch (RuntimeException e) {
@@ -201,7 +201,8 @@ public final class NetClient implements Transport.Listener, AutoCloseable {
                 return;
             } catch (IOException ignored) {
             }
-            long wait = Math.min(900, 100L + 80L * attempt);
+            long wait = Math.min(config.reconnectBackoffMaxMs(),
+                    config.reconnectBackoffBaseMs() + 80L * attempt);
             try {
                 Thread.sleep(wait);
             } catch (InterruptedException e) {
@@ -245,7 +246,7 @@ public final class NetClient implements Transport.Listener, AutoCloseable {
             lastPongNanos = System.nanoTime();
             return;
         }
-        if (packet.type == Packet.DATA) {
+        if (packet.type == Packet.DATA || packet.type == Packet.VOICE) {
             listener.onMessage(packet.payload);
         }
     }
@@ -270,6 +271,11 @@ public final class NetClient implements Transport.Listener, AutoCloseable {
     public void sendUnreliable(byte[] payload) {
         Transport t = transport;
         if (t != null) t.send(new Packet(Packet.DATA, 0, payload, false));
+    }
+
+    public void sendVoice(byte[] payload) {
+        Transport t = transport;
+        if (t != null) t.send(new Packet(Packet.VOICE, 0, payload, false));
     }
 
     public ClockSync clock() {
