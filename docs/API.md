@@ -33,6 +33,56 @@ usual install folders.
 If a `lib` folder exists, both scripts add `lib/*.jar` to the compile and run classpath. The folder
 is empty by default. It is used only for the optional WebRTC adapter and `webrtc-java` natives.
 
+### Integration walkthrough
+
+The engine is a plain library. A host application creates a server, creates clients, and feeds the
+engine with bytes and its own world model:
+
+```java
+NetConfig cfg = NetConfig.DEFAULT;
+
+NetServer server = new NetServer(45800, cfg, new NetServer.Listener() {
+    @Override
+    public void onConnect(Connection connection) {
+    }
+
+    @Override
+    public void onMessage(Connection connection, byte[] payload) {
+        // application protocol: parse, apply, reply
+    }
+
+    @Override
+    public void onDisconnect(Connection connection, String reason) {
+    }
+});
+server.start();
+
+NetClient client = NetClient.connect("192.168.0.5", 45800, cfg, new NetClient.Listener() {
+    @Override
+    public void onMessage(byte[] payload) {
+    }
+
+    @Override
+    public void onClosed(String reason) {
+    }
+});
+```
+
+The same objects serve ticks, prediction and voice:
+
+```java
+TickRunner runner = new TickRunner(cfg.tickConfig(), (tick, lagMs) -> {
+    // one simulation step
+});
+runner.start();
+
+Predictor<MyState> predictor = new Predictor<>(model, cfg.predictionConfig());
+NetConfig net = cfg.netConfig(false);
+VoiceEngine voice = new VoiceEngine(cfg.voiceConfig(), frame -> client.sendVoice(frame));
+voice.start();
+```
+
+
 ## 2. Text message format
 
 A game frame is a UTF-8 text block. Each line is one message and a final `END` line terminates the

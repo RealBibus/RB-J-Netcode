@@ -90,7 +90,7 @@ public final class HomeScreen extends Screen {
 
         Brush.text(g, "SNAKE.NET", 32, 30, Theme.bold(16), Theme.TEXT);
         Brush.text(g, "// netcode test bench", 148, 30, Theme.font(12), Theme.MUTED);
-        Brush.right(g, "v1.1  //  netcore " + netcore.NetCore.VERSION, 1248, 30, Theme.font(11), Theme.DIM);
+        Brush.right(g, "v2.0  //  netcore " + netcore.NetCore.VERSION, 1248, 30, Theme.font(11), Theme.DIM);
 
         boolean connected = app.client() != null;
         g.setColor(connected ? Theme.ACCENT : Theme.MUTED);

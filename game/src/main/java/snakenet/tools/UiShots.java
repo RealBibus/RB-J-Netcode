@@ -35,7 +35,7 @@ public final class UiShots {
         app.setPreviewId(1);
         app.setPreviewAddress("192.168.1.42:45800");
 
-        app.log("engine netcore 1.0 initialised (UDP + TCP)");
+        app.log("engine netcore 2.0 initialised (UDP + TCP)");
         app.log("local address 192.168.1.42, port 45800 free");
         app.log("awaiting session: create or join");
         shoot(app.homeScreen(), new File(dir, "1-menu.png"), 900);

@@ -143,7 +143,7 @@ public final class VoiceEngine {
             try {
                 read = mic.read(buffer, 0, buffer.length);
             } catch (Throwable e) {
-                return;
+                break;
             }
             if (read <= 0) continue;
             captureFrames++;
@@ -211,7 +211,7 @@ public final class VoiceEngine {
                 speaker.write(bytes, 0, bytes.length);
                 mixedFrames++;
             } catch (Throwable e) {
-                return;
+                continue;
             }
         }
     }
