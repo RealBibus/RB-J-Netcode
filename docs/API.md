@@ -143,6 +143,7 @@ raw, so incompressible data never pays a penalty.
 | `NetStats` | counters for one transport | `packetsIn()`, `packetsOut()`, `bytesIn()`, `bytesOut()`, `kbpsIn()` |
 | `NetInfo` | local addresses and port checks | `localAddresses()`, `setPreviewIp`, `primaryIp()`, `portFree`, `freePortFrom` |
 | `LanDiscovery` | beacon + scanner | `Beacon`, `Scanner`, `Found` |
+| `MatchMaker` | waiting list and pairing | `addListener`, `removeListener`, `join`, `leave`, `waiting`, `pollAndNotify`, `clear` |
 | `ClockSync` | ping/pong clock bookkeeping | `onPingSent`, `onPong`, `serverNanosNow`, `serverSecondsNow`, `rttMs`, `rttMsPrecise`, `jitterMs`, `lossPercent`, `quality`, `offsetNanos`, `millisSincePong`, `synced` |
 
 `UdpPeer` and `TcpTransport` are internal implementations of `Transport` and are not part of the

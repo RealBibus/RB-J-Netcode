@@ -9,7 +9,8 @@ engine can drive any turn-based or real-time game.
 engine/src/main/java/netcore/
   time/      TickConfig, TickMode, TickClock, TickRunner, TickStats
   net/       NetServer, NetClient, Connection, Transport, TcpTransport, UdpPeer,
-             Packet, FrameCodec, NetCodec, NetConfig, NetInfo, NetStats, LanDiscovery
+             Packet, FrameCodec, NetCodec, NetConfig, NetInfo, NetStats, LanDiscovery,
+             MatchMaker
   sync/      ClockSync
   predict/   Predictor, SimModel, InputCommand, Correction, PredictionConfig
   voice/     VoiceMode, VoiceConfig, VoiceEngine, VoicePacket, VoiceJitterBuffer,
@@ -180,6 +181,24 @@ The client tries the preferred transport first. If UDP stays silent for `connect
 is allowed, it connects over TCP instead, provided the server listens on both transports; the
 application does not have to switch. Reliable messages are fragmented to the MTU, acknowledged and
 retransmitted after `resendMs`.
+
+### Matchmaking
+
+`MatchMaker` keeps a waiting list of players that are looking for a match and pairs them:
+
+```java
+MatchMaker maker = new MatchMaker();
+maker.addListener(match -> {
+    // two players: firstHost/firstPort and secondHost/secondPort
+});
+maker.join("alpha", "192.168.0.5", 45800);
+maker.join("beta", "192.168.0.6", 45800);
+maker.pollAndNotify();
+```
+
+The lobby is FIFO by join order; a poll needs two entries and notifies the listener once. `join`
+returns the player name, `leave(name)` removes a player, `waiting()` reports the queue depth and
+`clear()` drops all entries.
 
 ### Packets and codecs
 

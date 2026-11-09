@@ -71,6 +71,7 @@ public final class SelfTest {
         testReconnectDuringRound();
         testSecondRound();
         testFullRound();
+        testMatchMaker();
         System.out.println();
         System.out.println("TOTAL: passed=" + passed + ", failed=" + failed);
         System.exit(failed == 0 ? 0 : 1);
@@ -97,6 +98,29 @@ public final class SelfTest {
             Thread.sleep(20);
         }
         return condition.getAsBoolean();
+    }
+
+    private static void testMatchMaker() {
+        System.out.println("[engine: matchmaking]");
+        netcore.net.MatchMaker maker = new netcore.net.MatchMaker();
+        final netcore.net.MatchMaker.Match[] madeBox = new netcore.net.MatchMaker.Match[1];
+        netcore.net.MatchMaker.Listener listener = m -> madeBox[0] = m;
+        maker.addListener(listener);
+        check("empty lobby waits", maker.waiting() == 0);
+        maker.join("alpha", "127.0.0.1", 45800);
+        check("one player waits", maker.waiting() == 1);
+        check("no pair with one player", maker.pollAndNotify() == 0);
+        check("player stays queued", maker.waiting() == 1);
+        maker.join("beta", "127.0.0.1", 45801);
+        check("two players queue", maker.waiting() == 2);
+        check("pair formed", maker.pollAndNotify() == 1);
+        netcore.net.MatchMaker.Match made = madeBox[0];
+        check("first player is alpha", made != null && "alpha".equals(made.firstName) && made.firstPort == 45800);
+        check("second player is beta", made != null && "beta".equals(made.secondName) && made.secondPort == 45801);
+        maker.leave("beta");
+        check("leave frees the slot", maker.waiting() == 0);
+        maker.clear();
+        maker.removeListener(listener);
     }
 
     private static void testTickConfig() {
