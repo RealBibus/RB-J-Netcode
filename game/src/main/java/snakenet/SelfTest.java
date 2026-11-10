@@ -20,10 +20,21 @@ import netcore.voice.VoiceJitterBuffer;
 import netcore.voice.VoiceMode;
 import snakenet.client.GameClient;
 import snakenet.client.SnakePredictState;
+import snakenet.game.Chess;
 import snakenet.game.GameConfig;
 import snakenet.game.SnakeState;
-import snakenet.net.Msg;
-import snakenet.net.Protocol;
+import netcore.netcode.Msg;
+import netcore.netcode.MsgType;
+import netcore.netcode.Codecs;
+import netcore.netcode.NetworkBehaviour;
+import netcore.netcode.NetworkClient;
+import netcore.netcode.NetworkObject;
+import netcore.netcode.Rpc;
+import netcore.netcode.RpcRouter;
+import netcore.netcode.SyncVar;
+import netcore.netcode.ValueCodecs;
+import snakenet.client.RoomView;
+import snakenet.net.Net;
 import snakenet.server.GameServer;
 
 import java.net.DatagramPacket;
@@ -66,12 +77,15 @@ public final class SelfTest {
         testDiscovery();
         testBeacon();
         testMsg();
+        testNetcode();
         testConfig();
         testReconnect();
         testReconnectDuringRound();
         testSecondRound();
+        testHubLobbies();
         testFullRound();
         testMatchMaker();
+        testChess();
         System.out.println();
         System.out.println("TOTAL: passed=" + passed + ", failed=" + failed);
         System.exit(failed == 0 ? 0 : 1);
@@ -100,13 +114,22 @@ public final class SelfTest {
         return condition.getAsBoolean();
     }
 
-    private static void testMatchMaker() {
+    private static void testMatchMaker() throws Exception {
         System.out.println("[engine: matchmaking]");
         netcore.net.MatchMaker maker = new netcore.net.MatchMaker();
         final netcore.net.MatchMaker.Match[] madeBox = new netcore.net.MatchMaker.Match[1];
         netcore.net.MatchMaker.Listener listener = m -> madeBox[0] = m;
         maker.addListener(listener);
         check("empty lobby waits", maker.waiting() == 0);
+        check("matchmaker enabled by default", maker.enabled());
+        check("default lobby capacity is two", maker.capacity() == 2);
+        maker.withCapacity(4);
+        check("lobby capacity is tunable", maker.capacity() == 4);
+        maker.setEnabled(false);
+        check("disabled stops pairing", !maker.enabled());
+        check("disabled polls nothing", maker.pollAndNotify() == 0);
+        maker.setEnabled(true);
+        check("enabled polls again", maker.enabled());
         maker.join("alpha", "127.0.0.1", 45800);
         check("one player waits", maker.waiting() == 1);
         check("no pair with one player", maker.pollAndNotify() == 0);
@@ -121,6 +144,60 @@ public final class SelfTest {
         check("leave frees the slot", maker.waiting() == 0);
         maker.clear();
         maker.removeListener(listener);
+
+        netcore.net.MatchMaker policyMaker = new netcore.net.MatchMaker();
+        final netcore.net.MatchMaker.Match[] policyBox = new netcore.net.MatchMaker.Match[1];
+        policyMaker.addListener(m -> policyBox[0] = m);
+        policyMaker.withPairing((first, second) -> !first.equals("solo") && !second.equals("solo"));
+        policyMaker.withCapacity(4);
+        check("pairing policy is stored", policyMaker.pairing() != null);
+        policyMaker.join("solo", "127.0.0.1", 45900);
+        policyMaker.join("duo1", "127.0.0.1", 45901);
+        policyMaker.join("duo2", "127.0.0.1", 45902);
+        check("policy skips an incompatible entry", policyMaker.pollAndNotify() == 1);
+        check("policy picks a compatible pair", policyBox[0] != null
+                && "duo1".equals(policyBox[0].firstName) && "duo2".equals(policyBox[0].secondName));
+        check("the incompatible entry stays queued", policyMaker.waiting() == 1);
+        policyMaker.clear();
+
+        netcore.net.MatchMaker timed = new netcore.net.MatchMaker();
+        timed.withTimeoutMs(40);
+        check("timeout is tunable", timed.timeoutMs() == 40);
+        timed.join("slow", "127.0.0.1", 45910);
+        Thread.sleep(90);
+        timed.pollAndNotify();
+        check("expired entries are pruned", timed.waiting() == 0);
+        timed.join("fresh", "127.0.0.1", 45911);
+        check("fresh entries survive the timeout", timed.waiting() == 1);
+        timed.clear();
+    }
+
+    private static void testChess() {
+        System.out.println("[game: chess]");
+        Chess chess = new Chess();
+        check("chess starts with 20 legal moves", chess.legalMoves().size() == 20,
+                "legal=" + chess.legalMoves().size());
+        check("chess starts with white to move", chess.turn() == Chess.WHITE);
+        check("chess start position has no check", !chess.isCheck());
+        check("chess start position is not checkmate", !chess.isCheckmate());
+        check("chess random bot move exists", chess.randomLegalMove() != null);
+        check("chess square name", Chess.squareName(28).equals("e4"));
+        check("chess square parse", Chess.square("e4") == 28);
+        Chess afterF3 = chess.apply(new Chess.Move(13, 21, Chess.WP, 0, 0, false));
+        check("f3 applied and black moves", afterF3.turn() == Chess.BLACK);
+        Chess afterE5 = afterF3.apply(new Chess.Move(52, 36, Chess.BP, 0, 0, false));
+        Chess afterG4 = afterE5.apply(new Chess.Move(14, 30, Chess.WP, 0, 0, false));
+        Chess afterQh4 = afterG4.apply(new Chess.Move(59, 31, Chess.BQ, 0, 0, false));
+        check("fool's mate leaves white in check", afterQh4.isCheck());
+        check("fool's mate is checkmate", afterQh4.isCheckmate());
+
+        Chess replayed = Chess.fromFen(chess.toFen());
+        check("fen roundtrip keeps the board", replayed.toFen().equals(chess.toFen()));
+        check("fen roundtrip keeps the turn", replayed.turn() == chess.turn());
+        Chess.Move bot = new Chess().bestMove(2);
+        check("search returns an opening move", bot != null);
+        check("search move is legal", bot != null && new Chess().legalMoves().stream()
+                .anyMatch(m -> m.from == bot.from && m.to == bot.to && m.promotion == bot.promotion));
     }
 
     private static void testTickConfig() {
@@ -358,34 +435,35 @@ public final class SelfTest {
         cfg.walls = false;
         check("config produces subtick ticks",
                 cfg.tickConfig().isSubtick() && cfg.tickConfig().subSteps() == 4);
-        GameConfig copy = GameConfig.read(cfg.write(Msg.of("T")), new GameConfig());
+        GameConfig copy = GameConfig.read(cfg.write(Msg.of(TEST)), new GameConfig());
         check("subtick survives serialisation", copy.subtick && copy.subSteps == 4);
 
         GameServer server = new GameServer(0, "Test", cfg);
         server.start();
         Collect c = new Collect();
         c.client = GameClient.connect("127.0.0.1", server.port(), c);
-        c.client.send(Msg.of(Protocol.HELLO).putStr("name", "Sub").put("color", 0).putStr("token", "sub-tok"));
-        check("subtick client joined", waitFor(() -> c.last(Protocol.WELCOME) != null, 3000));
-        int pid = c.last(Protocol.WELCOME) == null ? -1 : c.last(Protocol.WELCOME).num("pid", -1);
+        c.client.send(Msg.of(Net.HELLO).putStr("name", "Sub").put("color", 0).putStr("token", "sub-tok"));
+        c.createLobby("Subtick test");
+        check("subtick client joined", waitFor(() -> c.last(Net.WELCOME) != null, 3000));
+        int pid = c.last(Net.WELCOME) == null ? -1 : c.last(Net.WELCOME).num("pid", -1);
 
-        c.client.send(Msg.of(Protocol.START));
-        check("subtick round started", waitFor(() -> c.last(Protocol.SNAP) != null, 8000));
+        c.client.send(Msg.of(Net.START));
+        check("subtick round started", waitFor(() -> c.last(Net.SNAP) != null, 8000));
 
-        Msg first = c.last(Protocol.SNAP);
+        Msg first = c.last(Net.SNAP);
         int firstTick = first == null ? 1 : first.num("t", 1);
         int dir = c.snakeDir(pid);
         int target = Math.floorMod(dir + 1, 4);
         int alt = Math.floorMod(dir + 3, 4);
         int at = firstTick + 8;
-        c.client.send(Msg.of(Protocol.IN).put("d", target).put("t", at).put("s", "0.950").put("n", 1));
-        c.client.send(Msg.of(Protocol.IN).put("d", alt).put("t", at).put("s", "0.150").put("n", 2));
+        c.client.send(Msg.of(Net.IN).put("d", target).put("t", at).put("s", "0.950").put("n", 1));
+        c.client.send(Msg.of(Net.IN).put("d", alt).put("t", at).put("s", "0.150").put("n", 2));
 
         check("same-tick inputs arrived", waitFor(() -> {
-            Msg s = c.last(Protocol.SNAP);
+            Msg s = c.last(Net.SNAP);
             return s != null && s.num("t", 0) >= at && s.num("si", 0) >= 2;
         }, 4000));
-        Msg s = c.last(Protocol.SNAP);
+        Msg s = c.last(Net.SNAP);
         check("server reports subtick mode", s != null && s.num("se", 0) == 1 && s.num("ss", 0) == 4);
         check("both sub inputs received", s != null && s.num("si", 0) >= 2,
                 s == null ? "no snapshot" : "in=" + s.num("si", 0));
@@ -398,11 +476,11 @@ public final class SelfTest {
         check("higher sub wins the turn", waitFor(() -> c.snakeDir(pid) == target, 4000),
                 "dir=" + c.snakeDir(pid) + ", expected " + target);
 
-        Msg latest = c.last(Protocol.SNAP);
+        Msg latest = c.last(Net.SNAP);
         int next = (latest == null ? at : latest.num("t", at)) + 6;
-        c.client.send(Msg.of(Protocol.IN).put("d", target).put("t", next).put("s", "oops").put("n", 3));
+        c.client.send(Msg.of(Net.IN).put("d", target).put("t", next).put("s", "oops").put("n", 3));
         check("malformed sub does not break the server", waitFor(() -> {
-            Msg x = c.last(Protocol.SNAP);
+            Msg x = c.last(Net.SNAP);
             return x != null && x.num("t", 0) > next;
         }, 3000) && c.client.isOpen());
 
@@ -858,11 +936,75 @@ public final class SelfTest {
 
     private static void testMsg() {
         System.out.println("[protocol]");
-        Msg m = Msg.of("CHAT").putStr("from", "Вася|Пупкин, 100%").putStr("text", "привет\nмир").put("c", 3);
+        Msg m = Msg.of(Net.CHAT).putStr("from", "Вася|Пупкин, 100%").putStr("text", "привет\nмир").put("c", 3);
         Msg parsed = Msg.parse(m.encode());
         check("cyrillic and separators survive", parsed != null && parsed.str("from").equals("Вася|Пупкин, 100%"));
         check("newline survives", parsed != null && parsed.str("text").equals("привет\nмир"));
         check("garbage is rejected", Msg.parse("|||") == null);
+    }
+
+    private static void testNetcode() {
+        System.out.println("[engine: netcode]");
+
+        MsgType first = MsgType.declare("test/netcode/type");
+        MsgType again = MsgType.declare("test/netcode/type");
+        MsgType other = MsgType.declare("test/netcode/other");
+        check("message declarations are shared", first == again);
+        check("message hash is stable", first.hash() == again.hash());
+        check("undeclared messages are dropped", Msg.parse("test/netcode/missing|x=1") == null);
+        check("declared messages parse", Msg.parse(Msg.of(first).put("n", 7).encode()) != null);
+        check("message identity is per declaration", Msg.of(first).is(first) && !Msg.of(first).is(other));
+
+        Rpc<Msg> serverRpc = Rpc.server("test/netcode/server", Codecs.MSG);
+        Rpc<Msg> observerRpc = Rpc.observers("test/netcode/observers", Codecs.MSG);
+        Rpc<Msg> targetRpc = Rpc.target("test/netcode/target", Codecs.MSG);
+        check("rpc kinds are declared", serverRpc.kind() == Rpc.Kind.SERVER
+                && observerRpc.kind() == Rpc.Kind.OBSERVERS && targetRpc.kind() == Rpc.Kind.TARGET);
+
+        RpcRouter serverRouter = new RpcRouter(true);
+        final Msg[] delivered = new Msg[1];
+        serverRouter.on(serverRpc, (from, message) -> delivered[0] = message);
+        check("server router executes server rpcs",
+                serverRouter.dispatch(null, serverRpc.newMsg().put("v", 3)));
+        check("server router decodes the payload", delivered[0] != null && delivered[0].num("v", 0) == 3);
+        check("server router ignores observer rpcs", !serverRouter.handles(observerRpc.newMsg()));
+
+        RpcRouter clientRouter = new RpcRouter(false);
+        boolean rejected = false;
+        try {
+            clientRouter.on(serverRpc, (from, message) -> {
+            });
+        } catch (IllegalArgumentException e) {
+            rejected = true;
+        }
+        check("client router rejects server rpcs", rejected);
+        clientRouter.on(observerRpc, (from, message) -> {
+        });
+        check("client router accepts observer rpcs", clientRouter.handles(observerRpc.newMsg()));
+
+        NetworkObject object = new NetworkObject(77);
+        ProbeBehaviour source = new ProbeBehaviour();
+        object.addBehaviour(source);
+        source.count.set(5);
+        source.label.set("ready");
+        Msg delta = object.drainSync();
+        check("sync produces a delta for the object", delta != null && delta.num("o", -1) == 77);
+        check("delta carries every changed field", delta != null
+                && delta.raw("probe.count").equals("5") && delta.str("probe.label").equals("ready"));
+        check("clean fields are not resent", object.drainSync() == null);
+
+        NetworkClient mirror = new NetworkClient();
+        ProbeBehaviour view = new ProbeBehaviour();
+        mirror.addBehaviour(view);
+        check("client starts from the declared default", view.count.get() == 0);
+        check("sync applies to the mirror", mirror.apply(delta)
+                && view.count.get() == 5 && view.label.get().equals("ready"));
+
+        final int[] observed = {0};
+        view.count.onChange(value -> observed[0] = value);
+        source.count.set(9);
+        mirror.apply(object.drainSync());
+        check("onChange fires on replication", observed[0] == 9);
     }
 
     private static void testConfig() {
@@ -875,28 +1017,43 @@ public final class SelfTest {
         check("speed applied", c.cellsPerSec == 15);
         check("tick rate applied", c.tickRate == 128);
         check("units per tick", c.unitsPerTick() == Math.round(15 * 1024 / 128f));
-        Msg m = c.write(Msg.of("T"));
+        Msg m = c.write(Msg.of(TEST));
         GameConfig back = GameConfig.read(m, new GameConfig());
         check("serialisation", back.cols == 40 && back.tickRate == 128 && back.cellsPerSec == 15);
         c.voice = false;
         c.voiceMode = 1;
         c.voiceJitterTarget = 2;
         c.voiceJitterMax = 6;
-        GameConfig voiceBack = GameConfig.read(c.write(Msg.of("T")), new GameConfig());
+        GameConfig voiceBack = GameConfig.read(c.write(Msg.of(TEST)), new GameConfig());
         check("voice settings serialise", !voiceBack.voice && voiceBack.voiceMode == 1
                 && voiceBack.voiceJitterTarget == 2 && voiceBack.voiceJitterMax == 6);
         check("name is sanitised", GameConfig.sanitizeName("  Ва\u0007ся   Пупкин  ").equals("Вася Пупкин"));
         check("name fits 16 chars", GameConfig.sanitizeName("а".repeat(50)).length() == 16);
     }
 
+    private static final MsgType TEST = MsgType.declare("test/config");
+
+    private static final class ProbeBehaviour extends NetworkBehaviour {
+        final SyncVar<Integer> count = syncVar("count", ValueCodecs.INT, 0);
+        final SyncVar<String> label = syncVar("label", ValueCodecs.STRING, "");
+
+        ProbeBehaviour() {
+            super("probe");
+        }
+    }
+
     private static final class Collect implements GameClient.Listener {
         GameClient client;
+        volatile int joinedRoom = -1;
         final List<List<Msg>> frames = Collections.synchronizedList(new ArrayList<>());
         volatile boolean closed;
 
         @Override
         public void onFrame(List<Msg> frame) {
             frames.add(frame);
+            for (Msg m : frame) {
+                if (m.is(Net.JOINED)) joinedRoom = m.num("id", -1);
+            }
         }
 
         @Override
@@ -908,44 +1065,54 @@ public final class SelfTest {
             closed = true;
         }
 
-        int count(String type) {
+        int count(Rpc<?> rpc) {
             int n = 0;
             synchronized (frames) {
                 for (List<Msg> f : frames)
-                    for (Msg m : f) if (m.is(type)) n++;
+                    for (Msg m : f) if (m.is(rpc)) n++;
             }
             return n;
         }
 
-        int lastCount(String type) {
+        int lastCount(Rpc<?> rpc) {
             synchronized (frames) {
                 for (int i = frames.size() - 1; i >= 0; i--) {
                     int n = 0;
-                    for (Msg m : frames.get(i)) if (m.is(type)) n++;
+                    for (Msg m : frames.get(i)) if (m.is(rpc)) n++;
                     if (n > 0) return n;
                 }
             }
             return 0;
         }
 
-        Msg last(String type) {
+        Msg last(Rpc<?> rpc) {
             synchronized (frames) {
                 for (int i = frames.size() - 1; i >= 0; i--) {
                     for (int k = frames.get(i).size() - 1; k >= 0; k--) {
-                        if (frames.get(i).get(k).is(type)) return frames.get(i).get(k);
+                        if (frames.get(i).get(k).is(rpc)) return frames.get(i).get(k);
                     }
                 }
             }
             return null;
         }
 
-        List<Msg> lastFrameWith(String type) {
+        List<Msg> lastFrameWith(Rpc<?> rpc) {
             synchronized (frames) {
                 for (int i = frames.size() - 1; i >= 0; i--) {
-                    for (Msg m : frames.get(i)) if (m.is(type)) return frames.get(i);
+                    for (Msg m : frames.get(i)) if (m.is(rpc)) return frames.get(i);
                 }
             }
             return null;
+        }
+
+        void createLobby(String name) {
+            if (client != null) {
+                client.send(Net.LOBBY_CREATE.newMsg().put("kind", Net.KIND_SNAKE).putStr("name", name));
+            }
+        }
+
+        void joinLobby(int roomId) {
+            if (client != null) client.send(Net.LOBBY_JOIN.newMsg().put("id", roomId));
         }
 
         java.util.Set<String> headsOf(int playerId) {
@@ -953,7 +1120,7 @@ public final class SelfTest {
             synchronized (frames) {
                 for (List<Msg> f : frames) {
                     for (Msg m : f) {
-                        if (m.is(Protocol.SNAKE) && m.num("p", -1) == playerId) {
+                        if (m.is(Net.SNAKE) && m.num("p", -1) == playerId) {
                             String g = m.raw("g");
                             int comma = g.indexOf(',');
                             set.add(comma > 0 ? g.substring(0, comma) : g);
@@ -965,10 +1132,10 @@ public final class SelfTest {
         }
 
         int snakeDir(int playerId) {
-            List<Msg> frame = lastFrameWith(Protocol.SNAP);
+            List<Msg> frame = lastFrameWith(Net.SNAP);
             if (frame == null) return -1;
             for (Msg m : frame) {
-                if (m.is(Protocol.SNAKE) && m.num("p", -1) == playerId) return m.num("d", -1);
+                if (m.is(Net.SNAKE) && m.num("p", -1) == playerId) return m.num("d", -1);
             }
             return -1;
         }
@@ -977,17 +1144,17 @@ public final class SelfTest {
             int max = 0;
             synchronized (frames) {
                 for (List<Msg> f : frames) {
-                    for (Msg m : f) if (m.is(Protocol.SNAP)) max = Math.max(max, m.num("t", 0));
+                    for (Msg m : f) if (m.is(Net.SNAP)) max = Math.max(max, m.num("t", 0));
                 }
             }
             return max;
         }
 
         int lobbyPlayers() {
-            List<Msg> frame = lastFrameWith(Protocol.LOBBY);
+            List<Msg> frame = lastFrameWith(Net.LOBBY);
             if (frame == null) return -1;
             int n = 0;
-            for (Msg m : frame) if (m.is(Protocol.PLAYER)) n++;
+            for (Msg m : frame) if (m.is(Net.PLAYER)) n++;
             return n;
         }
     }
@@ -1003,36 +1170,47 @@ public final class SelfTest {
         int port = server.port();
 
         List<Collect> clients = new ArrayList<>();
+        final Collect[] created = new Collect[1];
         for (int i = 0; i < 2; i++) {
             Collect c = new Collect();
             c.client = GameClient.connect("127.0.0.1", port, c);
             clients.add(c);
-            c.client.send(Msg.of(Protocol.HELLO).putStr("name", "P" + i).put("color", i));
+            c.client.send(Msg.of(Net.HELLO).putStr("name", "P" + i).put("color", i));
+            if (created[0] == null) {
+                c.createLobby("Second round");
+                check("creator joined", waitFor(() -> c.last(Net.WELCOME) != null, 3000));
+                created[0] = c;
+            } else {
+                Collect room = created[0];
+                check("lobby advertised", waitFor(() -> room.joinedRoom >= 0, 3000));
+                c.joinLobby(room.joinedRoom);
+                check("guest joined", waitFor(() -> c.last(Net.WELCOME) != null, 3000));
+            }
             Thread.sleep(120);
         }
         Collect host = clients.get(0);
         check("both players are in the lobby", waitFor(() -> host.lobbyPlayers() == 2, 3000));
 
-        host.client.send(Msg.of(Protocol.START));
-        check("first round finished", waitFor(() -> host.count(Protocol.OVER) > 0, 20000));
+        host.client.send(Msg.of(Net.START));
+        check("first round finished", waitFor(() -> host.count(Net.OVER) > 0, 20000));
         int tickRound1 = host.maxTick();
 
-        host.client.send(Msg.of(Protocol.AGAIN));
+        host.client.send(Msg.of(Net.AGAIN));
         check("back in the lobby", waitFor(() -> {
-            Msg l = host.last(Protocol.LOBBY);
-            return l != null && l.num("phase", -1) == Protocol.PHASE_LOBBY;
+            Msg l = host.last(Net.LOBBY);
+            return l != null && l.num("phase", -1) == Net.PHASE_LOBBY;
         }, 4000));
 
-        host.client.send(Msg.of(Protocol.START));
-        int before = host.count(Protocol.SNAP);
-        check("second round started", waitFor(() -> host.count(Protocol.SNAP) > before + 5, 6000));
+        host.client.send(Msg.of(Net.START));
+        int before = host.count(Net.SNAP);
+        check("second round started", waitFor(() -> host.count(Net.SNAP) > before + 5, 6000));
         check("ticks never go backwards", host.maxTick() > tickRound1,
                 "before " + tickRound1 + ", now " + host.maxTick());
 
-        int pid = host.last(Protocol.WELCOME).num("pid", -1);
-        int tick = host.last(Protocol.SNAP) == null ? 1 : host.last(Protocol.SNAP).num("t", 1);
+        int pid = host.last(Net.WELCOME).num("pid", -1);
+        int tick = host.last(Net.SNAP) == null ? 1 : host.last(Net.SNAP).num("t", 1);
         host.frames.clear();
-        host.client.send(Msg.of(Protocol.IN).put("d", 0).put("t", tick + 4).put("s", 0.5).put("n", 1));
+        host.client.send(Msg.of(Net.IN).put("d", 0).put("t", tick + 4).put("s", 0.5).put("n", 1));
         check("input works in the second round", waitFor(() -> hasAck(host, pid, 1), 4000));
 
         for (Collect c : clients) c.client.close();
@@ -1049,17 +1227,18 @@ public final class SelfTest {
 
         Collect first = new Collect();
         first.client = GameClient.connect("127.0.0.1", port, first);
-        first.client.send(Msg.of(Protocol.HELLO).putStr("name", "Vasya").put("color", 0).putStr("token", "tok-A"));
+        first.client.send(Msg.of(Net.HELLO).putStr("name", "Vasya").put("color", 0).putStr("token", "tok-A"));
+        first.createLobby("Reconnect test");
         check("first session joined", waitFor(() -> first.lobbyPlayers() == 1, 3000));
 
         Collect second = new Collect();
         second.client = GameClient.connect("127.0.0.1", port, second);
-        second.client.send(Msg.of(Protocol.HELLO).putStr("name", "Vasya").put("color", 0).putStr("token", "tok-A"));
-        check("old session kicked", waitFor(() -> first.count(Protocol.KICK) > 0, 2000));
+        second.client.send(Msg.of(Net.HELLO).putStr("name", "Vasya").put("color", 0).putStr("token", "tok-A"));
+        check("old session kicked", waitFor(() -> first.count(Net.KICK) > 0, 2000));
         check("player is not duplicated", waitFor(() -> second.lobbyPlayers() == 1, 3000),
                 "was " + second.lobbyPlayers());
 
-        second.client.send(Msg.of(Protocol.HELLO).putStr("name", "Vasya").put("color", 0).putStr("token", "tok-A"));
+        second.client.send(Msg.of(Net.HELLO).putStr("name", "Vasya").put("color", 0).putStr("token", "tok-A"));
         Thread.sleep(250);
         check("repeated HELLO does not duplicate", second.lobbyPlayers() == 1,
                 "was " + second.lobbyPlayers());
@@ -1081,25 +1260,28 @@ public final class SelfTest {
 
         Collect host = new Collect();
         host.client = GameClient.connect("127.0.0.1", port, host);
-        host.client.send(Msg.of(Protocol.HELLO).putStr("name", "Host").put("color", 0).putStr("token", "host-tok"));
+        host.client.send(Msg.of(Net.HELLO).putStr("name", "Host").put("color", 0).putStr("token", "host-tok"));
+        host.createLobby("Reconnect round");
         check("host joined", waitFor(() -> host.lobbyPlayers() == 1, 3000));
 
         Collect player = new Collect();
         player.client = GameClient.connect("127.0.0.1", port, player);
-        player.client.send(Msg.of(Protocol.HELLO).putStr("name", "Player").put("color", 1).putStr("token", "p-tok"));
-        check("player joined", waitFor(() -> player.last(Protocol.WELCOME) != null, 3000));
-        int oldPid = player.last(Protocol.WELCOME).num("pid", -1);
+        player.client.send(Msg.of(Net.HELLO).putStr("name", "Player").put("color", 1).putStr("token", "p-tok"));
+        check("lobby advertised", waitFor(() -> host.joinedRoom >= 0, 3000));
+        player.joinLobby(host.joinedRoom);
+        check("player joined", waitFor(() -> player.last(Net.WELCOME) != null, 3000));
+        int oldPid = player.last(Net.WELCOME).num("pid", -1);
 
-        host.client.send(Msg.of(Protocol.START));
+        host.client.send(Msg.of(Net.START));
         check("snake is on the board", waitFor(() -> hasAliveSnake(player, oldPid), 8000));
 
         Collect back = new Collect();
         back.client = GameClient.connect("127.0.0.1", port, back);
-        back.client.send(Msg.of(Protocol.HELLO).putStr("name", "Player").put("color", 1).putStr("token", "p-tok"));
-        check("session restored", waitFor(() -> back.last(Protocol.WELCOME) != null, 3000));
-        int newPid = back.last(Protocol.WELCOME).num("pid", -1);
+        back.client.send(Msg.of(Net.HELLO).putStr("name", "Player").put("color", 1).putStr("token", "p-tok"));
+        check("session restored", waitFor(() -> back.last(Net.WELCOME) != null, 3000));
+        int newPid = back.last(Net.WELCOME).num("pid", -1);
         check("player id is kept", newPid == oldPid, "before " + oldPid + ", now " + newPid);
-        check("old client received KICK", waitFor(() -> player.closed || player.count(Protocol.KICK) > 0, 3000));
+        check("old client received KICK", waitFor(() -> player.closed || player.count(Net.KICK) > 0, 3000));
         check("snake is alive after reconnect", waitFor(() -> hasAliveSnake(back, oldPid), 3000));
         check("player is not duplicated after reconnect", waitFor(() -> back.lobbyPlayers() == 2, 3000),
                 "was " + back.lobbyPlayers());
@@ -1110,12 +1292,71 @@ public final class SelfTest {
     }
 
     private static boolean hasAliveSnake(Collect c, int playerId) {
-        List<Msg> frame = c.lastFrameWith(Protocol.SNAP);
+        List<Msg> frame = c.lastFrameWith(Net.SNAP);
         if (frame == null) return false;
         for (Msg m : frame) {
-            if (m.is(Protocol.SNAKE) && m.num("p", -1) == playerId) return m.num("a", 0) == 1;
+            if (m.is(Net.SNAKE) && m.num("p", -1) == playerId) return m.num("a", 0) == 1;
         }
         return false;
+    }
+
+    private static void testHubLobbies() throws Exception {
+        System.out.println("[hub: multiple lobbies]");
+        GameConfig base = new GameConfig();
+        base.applySize(0);
+        base.cellsPerSec = 4;
+        base.tickRate = 32;
+        GameServer server = new GameServer(0, "Hub", base);
+        server.start();
+        int port = server.port();
+
+        Collect snakeHost = new Collect();
+        snakeHost.client = GameClient.connect("127.0.0.1", port, snakeHost);
+        snakeHost.client.send(Msg.of(Net.HELLO).putStr("name", "Snake").put("color", 0).putStr("token", "snake-tok"));
+        check("snake host reached the hub", waitFor(() -> snakeHost.last(Net.HUB) != null, 3000));
+        snakeHost.createLobby("Snake lobby");
+        check("snake lobby joined", waitFor(() -> snakeHost.last(Net.WELCOME) != null, 3000));
+
+        GameConfig chessCfg = new GameConfig();
+        chessCfg.chess = true;
+        chessCfg.chessSide = 1;
+        chessCfg.chessBotDepth = 1;
+        Collect chessHost = new Collect();
+        chessHost.client = GameClient.connect("127.0.0.1", port, chessHost);
+        RoomView chessView = new RoomView();
+        chessHost.client.netcode().addBehaviour(chessView);
+        chessHost.client.send(Msg.of(Net.HELLO).putStr("name", "Chess").put("color", 1).putStr("token", "chess-tok"));
+        check("chess host reached the hub", waitFor(() -> chessHost.last(Net.HUB) != null, 3000));
+        chessHost.client.send(chessCfg.write(Net.LOBBY_CREATE.newMsg())
+                .put("kind", Net.KIND_CHESS).putStr("name", "Chess lobby"));
+        check("chess lobby joined", waitFor(() -> chessHost.last(Net.WELCOME) != null, 3000));
+        check("chess lobby reports its kind", chessHost.last(Net.WELCOME) != null
+                && chessHost.last(Net.WELCOME).num("kind", -1) == Net.KIND_CHESS);
+        check("lobbies are separate", snakeHost.joinedRoom >= 0 && chessHost.joinedRoom != snakeHost.joinedRoom);
+
+        snakeHost.client.send(Net.LOBBY_LIST.newMsg());
+        check("the hub lists both lobbies", waitFor(() -> snakeHost.lastCount(Net.ROOM) == 2, 3000),
+                "rooms: " + snakeHost.lastCount(Net.ROOM));
+        check("server keeps two rooms", server.rooms().size() == 2);
+
+        snakeHost.client.send(Net.START.newMsg());
+        check("snake lobby starts", waitFor(() -> snakeHost.count(Net.SNAP) > 0, 6000));
+        Thread.sleep(300);
+        check("the chess lobby does not start with it", chessHost.last(Net.SNAP) == null);
+
+        chessHost.client.send(Net.START.newMsg());
+        check("chess board is replicated", waitFor(() -> !chessView.fen.get().isBlank(), 8000));
+        check("chess bot makes a move", waitFor(() -> chessHost.count(Net.CHESS_MOVE_OUT) > 0, 10000));
+        check("chess turn syncs back to the client", waitFor(() -> chessView.turn.get() == 1, 5000));
+
+        chessHost.client.send(Net.LOBBY_LEAVE.newMsg());
+        check("leaving a lobby returns to the hub", waitFor(() -> chessHost.count(Net.LEFT) > 0, 3000));
+        check("the abandoned chess lobby closes", waitFor(() -> server.rooms().size() == 1, 3000),
+                "rooms: " + server.rooms().size());
+
+        snakeHost.client.close();
+        chessHost.client.close();
+        server.stop();
     }
 
     private static void testFullRound() throws Exception {
@@ -1131,58 +1372,71 @@ public final class SelfTest {
         check("server listens on a port", port > 0);
 
         List<Collect> clients = new ArrayList<>();
+        final Collect[] created = new Collect[1];
         for (int i = 0; i < 3; i++) {
             Collect c = new Collect();
             c.client = GameClient.connect("127.0.0.1", port, c);
             clients.add(c);
-            c.client.send(Msg.of(Protocol.HELLO).putStr("name", "Test" + i).put("color", i));
+            c.client.send(Msg.of(Net.HELLO).putStr("name", "Test" + i).put("color", i));
+            if (created[0] == null) {
+                c.createLobby("Full round");
+                check("creator joined", waitFor(() -> c.last(Net.WELCOME) != null, 3000));
+                created[0] = c;
+            } else {
+                Collect room = created[0];
+                check("lobby advertised", waitFor(() -> room.joinedRoom >= 0, 3000));
+                c.joinLobby(room.joinedRoom);
+                check("guest joined", waitFor(() -> c.last(Net.WELCOME) != null, 3000));
+            }
             Thread.sleep(150);
         }
         final Collect host = clients.get(0);
-        check("WELCOME received", host.last(Protocol.WELCOME) != null);
-        check("tick rate in WELCOME", host.last(Protocol.WELCOME) != null
-                && host.last(Protocol.WELCOME).num("rate", 0) == 64);
+        check("WELCOME received", host.last(Net.WELCOME) != null);
+        check("tick rate in WELCOME", host.last(Net.WELCOME) != null
+                && host.last(Net.WELCOME).num("rate", 0) == 64);
         check("3 players in the lobby", waitFor(() -> host.lobbyPlayers() == 3, 3000), "was " + host.lobbyPlayers());
 
-        host.client.send(Msg.of(Protocol.BOT).put("op", "add"));
-        host.client.send(Msg.of(Protocol.BOT).put("op", "add"));
+        host.client.send(Msg.of(Net.BOT).put("op", "add"));
+        host.client.send(Msg.of(Net.BOT).put("op", "add"));
         check("bots added", waitFor(() -> host.lobbyPlayers() == 5, 3000), "was " + host.lobbyPlayers());
-        host.client.send(Msg.of(Protocol.BOT).put("op", "del"));
-        host.client.send(Msg.of(Protocol.BOT).put("op", "del"));
+        host.client.send(Msg.of(Net.BOT).put("op", "del"));
+        host.client.send(Msg.of(Net.BOT).put("op", "del"));
         check("bots removed", waitFor(() -> host.lobbyPlayers() == 3, 3000), "was " + host.lobbyPlayers());
 
-        host.client.send(Msg.of(Protocol.START));
-        check("countdown started", waitFor(() -> host.count(Protocol.COUNT) >= 1, 4000));
-        check("snapshots are flowing", waitFor(() -> clients.get(1).count(Protocol.SNAP) > 5, 6000),
-                "snapshots: " + clients.get(1).count(Protocol.SNAP));
+        host.client.send(Msg.of(Net.START));
+        check("countdown started", waitFor(() -> host.count(Net.COUNT) >= 1, 4000));
+        check("snapshots are flowing", waitFor(() -> clients.get(1).count(Net.SNAP) > 5, 6000),
+                "snapshots: " + clients.get(1).count(Net.SNAP));
 
         check("snake is moving", clients.get(1).headsOf(1).size() > 1,
                 "unique heads: " + clients.get(1).headsOf(1).size());
 
-        Msg snap = clients.get(1).last(Protocol.SNAP);
-        int myPid = clients.get(1).last(Protocol.WELCOME).num("pid", -1);
+        Msg snap = clients.get(1).last(Net.SNAP);
+        int myPid = clients.get(1).last(Net.WELCOME).num("pid", -1);
         int tick = snap == null ? 1 : snap.num("t", 1);
         int rate = snap == null ? 64 : snap.num("rate", 64);
         int nx = 1 + (int) Math.ceil(rate * 0.05);
-        clients.get(1).client.send(Msg.of(Protocol.IN).put("d", 3).put("t", tick + nx).put("s", 0.5).put("n", 1));
+        clients.get(1).client.send(Msg.of(Net.IN).put("d", 3).put("t", tick + nx).put("s", 0.5).put("n", 1));
         check("input acknowledged by the server", waitFor(() -> hasAck(clients.get(1), myPid, 1), 3000),
                 "pid=" + myPid);
 
-        check("round finished", waitFor(() -> host.count(Protocol.OVER) > 0, 20000),
-                "snapshots: " + host.count(Protocol.SNAP));
-        check("results for 3 players", host.lastCount(Protocol.RESULT) == 3,
-                "rows: " + host.lastCount(Protocol.RESULT));
+        check("round finished", waitFor(() -> host.count(Net.OVER) > 0, 20000),
+                "snapshots: " + host.count(Net.SNAP));
+        check("results for 3 players", host.lastCount(Net.RESULT) == 3,
+                "rows: " + host.lastCount(Net.RESULT));
 
-        host.client.send(Msg.of(Protocol.AGAIN));
+        host.client.send(Msg.of(Net.AGAIN));
         check("back in the lobby", waitFor(() -> {
-            Msg l = host.last(Protocol.LOBBY);
-            return l != null && l.num("phase", -1) == Protocol.PHASE_LOBBY;
+            Msg l = host.last(Net.LOBBY);
+            return l != null && l.num("phase", -1) == Net.PHASE_LOBBY;
         }, 4000));
 
         Collect late = new Collect();
         late.client = GameClient.connect("127.0.0.1", port, late);
-        late.client.send(Msg.of(Protocol.HELLO).putStr("name", "Late").put("color", 4));
-        check("late player joined", waitFor(() -> late.last(Protocol.WELCOME) != null, 3000));
+        late.client.send(Msg.of(Net.HELLO).putStr("name", "Late").put("color", 4));
+        check("late player reached the hub", waitFor(() -> late.last(Net.HUB) != null, 3000));
+        late.joinLobby(host.joinedRoom);
+        check("late player joined", waitFor(() -> late.last(Net.WELCOME) != null, 3000));
         check("lobby updated to 4", waitFor(() -> host.lobbyPlayers() == 4, 3000), "was " + host.lobbyPlayers());
 
         server.stop();
@@ -1192,10 +1446,10 @@ public final class SelfTest {
     }
 
     private static boolean hasAck(Collect c, int playerId, int seq) {
-        List<Msg> frame = c.lastFrameWith(Protocol.SNAP);
+        List<Msg> frame = c.lastFrameWith(Net.SNAP);
         if (frame == null) return false;
         for (Msg m : frame) {
-            if (m.is(Protocol.SNAKE) && m.num("p", -1) == playerId) {
+            if (m.is(Net.SNAKE) && m.num("p", -1) == playerId) {
                 return m.num("ls", 0) >= seq;
             }
         }

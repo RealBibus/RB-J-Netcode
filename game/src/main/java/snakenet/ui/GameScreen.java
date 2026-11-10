@@ -9,10 +9,11 @@ import snakenet.client.ServerClock;
 import snakenet.client.SnakePredictState;
 import snakenet.client.SnakeRenderMath;
 import snakenet.client.Snapshot;
+import snakenet.game.Chess;
 import snakenet.game.GameConfig;
 import snakenet.game.SnakeState;
-import snakenet.net.Msg;
-import snakenet.net.Protocol;
+import netcore.netcode.Msg;
+import snakenet.net.Net;
 
 import javax.swing.AbstractAction;
 import javax.swing.JComponent;
@@ -122,7 +123,7 @@ public final class GameScreen extends Screen {
     private GameConfig cfg = new GameConfig();
     private int cols = 32;
     private int rows = 22;
-    private int phase = Protocol.PHASE_LOBBY;
+    private int phase = Net.PHASE_LOBBY;
     private int countdown;
     private double countdownAnim;
     private double goFlash;
@@ -134,6 +135,14 @@ public final class GameScreen extends Screen {
     private long lastPingAt;
     private Snapshot prev;
     private Snapshot cur;
+
+    private Chess chess = new Chess();
+    private int chessTurn = Chess.WHITE;
+    private int chessMyColor = Chess.WHITE;
+    private int chessWinner = -1;
+    private String chessEndReason = "";
+    private String lastSyncFen = "";
+    private int chessSelected = -1;
 
     
     private final ServerClock serverClock = new ServerClock();
@@ -186,8 +195,8 @@ public final class GameScreen extends Screen {
     public GameScreen(App app) {
         super(app);
 
-        bAgain = add(new NeonButton("PLAY AGAIN", NeonButton.Style.PRIMARY, 372, 556, 240, 54, () -> app.send(Msg.of(Protocol.AGAIN))));
-        bLobby = add(new NeonButton("HOME", NeonButton.Style.SECONDARY, 636, 556, 200, 54, app::leaveToHome));
+        bAgain = add(new NeonButton("PLAY AGAIN", NeonButton.Style.PRIMARY, 372, 556, 240, 54, () -> app.send(Net.AGAIN.newMsg())));
+        bLobby = add(new NeonButton("LOBBY", NeonButton.Style.SECONDARY, 636, 556, 200, 54, app::leaveLobby));
         bResume = add(new NeonButton("Resume", NeonButton.Style.PRIMARY, 500, 392, 280, 52, () -> pauseMenu = false));
         bQuit = add(new NeonButton("Quit to menu", NeonButton.Style.DANGER, 500, 456, 280, 52, app::leaveToHome));
         bAgain.visible = false;
@@ -224,7 +233,7 @@ public final class GameScreen extends Screen {
         getActionMap().put("chatopen", new AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                if (pauseMenu || phase == Protocol.PHASE_OVER) return;
+                if (pauseMenu || phase == Net.PHASE_OVER) return;
                 openChat();
             }
         });
@@ -332,10 +341,39 @@ public final class GameScreen extends Screen {
             @Override
             public void actionPerformed(ActionEvent e) {
                 if (pauseMenu || chatOpen) return;
-                if (phase != Protocol.PHASE_RUNNING) return;
+                if (phase != Net.PHASE_RUNNING) return;
                 handleInput(dir);
             }
         });
+    }
+
+    @Override
+    public void mousePressed(java.awt.event.MouseEvent e) {
+        if (phase == Net.PHASE_RUNNING && cfg.chess) {
+            double vx = (e.getX() - ox) / Math.max(0.001, scale);
+            double vy = (e.getY() - oy) / Math.max(0.001, scale);
+            double cs = Math.min(boardW, boardH) / 8.0;
+            int bx = (int) Math.floor((vx - (boardX + (boardW - cs * 8) / 2)) / cs);
+            int by = (int) Math.floor((vy - (boardY + (boardH - cs * 8) / 2)) / cs);
+            if (bx >= 0 && bx < Chess.SIZE && by >= 0 && by < Chess.SIZE) {
+                boolean flip = chessMyColor == Chess.BLACK;
+                int file = flip ? Chess.SIZE - 1 - bx : bx;
+                int rank = flip ? by : Chess.SIZE - 1 - by;
+                int sq = rank * Chess.SIZE + file;
+                int pc = chess.at(sq);
+                if (pc != 0 && ((pc >= 7) == (chessTurn == Chess.BLACK))) {
+                    if (chessSelected < 0) {
+                        chessSelected = sq;
+                    } else if (sq == chessSelected) {
+                        chessSelected = -1;
+                    } else {
+                        sendChessMove(chessSelected, sq, 0);
+                        chessSelected = -1;
+                    }
+                }
+            }
+        }
+        super.mousePressed(e);
     }
 
     @Override
@@ -358,42 +396,58 @@ public final class GameScreen extends Screen {
     @Override
     public void onFrame(List<Msg> frame) {
         for (Msg m : frame) {
-            switch (m.type()) {
-                case Protocol.LOBBY:
-                    readRoster(frame);
-                    break;
-                case Protocol.START:
-                    applyStart(m);
-                    break;
-                case Protocol.COUNT:
-                    countdown = m.num("n", countdown);
-                    countdownAnim = 1;
-                    Sfx.play(Sfx.Sound.COUNT);
-                    break;
-                case Protocol.SNAP:
-                    applySnapshot(frame);
-                    break;
-                case Protocol.OVER:
-                    results = new ArrayList<>();
-                    phase = Protocol.PHASE_OVER;
-                    countdown = 0;
-                    closePanel();
-                    app.log("round over");
-                    break;
-                case Protocol.RESULT:
-                    addResult(m);
-                    break;
-                case Protocol.ACK: {
-                    int n = m.num("n", -1);
-                    int at = m.num("t", -1);
-                    Integer sent = sentTicks.remove(n);
-                    if (sent != null) serverClock.observeApply(sent, at);
-                    if (predictor != null) predictor.retime(n, at);
-                    break;
+            if (m.is(Net.LOBBY)) {
+                readRoster(frame);
+            } else if (m.is(Net.STARTED)) {
+                applyStart(m);
+            } else if (m.is(Net.COUNT)) {
+                countdown = m.num("n", countdown);
+                countdownAnim = 1;
+                Sfx.play(Sfx.Sound.COUNT);
+            } else if (m.is(Net.SNAP)) {
+                applySnapshot(frame);
+            } else if (m.is(Net.CHESS_MOVE_OUT)) {
+                int from = m.num("f", -1);
+                int to = m.num("t", -1);
+                int promo = m.num("pr", 0);
+                if (!m.raw("fen").isEmpty()) {
+                    chess = Chess.fromFen(m.str("fen"));
+                    chessTurn = chess.turn();
+                } else {
+                    Chess.Move move = null;
+                    for (Chess.Move candidate : chess.legalMoves()) {
+                        if (candidate.from == from && candidate.to == to && candidate.promotion == promo) {
+                            move = candidate;
+                            break;
+                        }
+                    }
+                    if (move != null) {
+                        chess = chess.apply(move);
+                        chessTurn = chess.turn();
+                    }
                 }
-                case Protocol.CHAT: {
-                    String text = m.str("text");
-                    if (text.isEmpty()) break;
+            } else if (m.is(Net.CHESS_END)) {
+                phase = Net.PHASE_OVER;
+                chessWinner = m.num("w", -1);
+                chessEndReason = m.raw("r");
+                chessSelected = -1;
+            } else if (m.is(Net.OVER)) {
+                results = new ArrayList<>();
+                phase = Net.PHASE_OVER;
+                countdown = 0;
+                closePanel();
+                app.log("round over");
+            } else if (m.is(Net.RESULT)) {
+                addResult(m);
+            } else if (m.is(Net.ACK)) {
+                int n = m.num("n", -1);
+                int at = m.num("t", -1);
+                Integer sent = sentTicks.remove(n);
+                if (sent != null) serverClock.observeApply(sent, at);
+                if (predictor != null) predictor.retime(n, at);
+            } else if (m.is(Net.CHAT_OUT)) {
+                String text = m.str("text");
+                if (!text.isEmpty()) {
                     boolean system = m.num("kind", 0) == 1;
                     chatLines.add(new String[]{m.str("from"), text, system ? "1" : "0", String.valueOf(m.num("c", 0))});
                     if (chatLines.size() > 80) chatLines.remove(0);
@@ -402,17 +456,26 @@ public final class GameScreen extends Screen {
                         String lower = text.toLowerCase(java.util.Locale.ROOT);
                         if (lower.contains("joined") || lower.contains("reconnected")) Sfx.play(Sfx.Sound.JOIN);
                     }
-                    break;
                 }
-                case Protocol.KICK:
-                    app.toastError(m.str("msg"));
-                    app.log("KICK: " + m.str("msg"));
-                    break;
-                default:
-                    break;
+            } else if (m.is(Net.KICK)) {
+                app.toastError(m.str("msg"));
+                app.log("KICK: " + m.str("msg"));
             }
         }
-        if (results != null && phase == Protocol.PHASE_OVER) {
+        if (app.gameKind() == Net.KIND_CHESS) {
+            String fen = app.roomView().fen.get();
+            if (fen != null && !fen.isBlank() && !fen.equals(lastSyncFen)) {
+                lastSyncFen = fen;
+                chess = Chess.fromFen(fen);
+            }
+            chessTurn = app.roomView().turn.get();
+            if (phase == Net.PHASE_COUNT && app.roomView().phase.get() == Net.PHASE_RUNNING) {
+                phase = Net.PHASE_RUNNING;
+                countdown = 0;
+            }
+        }
+        boolean chessOver = app.gameKind() == Net.KIND_CHESS && phase == Net.PHASE_OVER;
+        if ((results != null || chessOver) && phase == Net.PHASE_OVER) {
             boolean host = app.isHost();
             bAgain.visible = true;
             bLobby.visible = true;
@@ -424,7 +487,7 @@ public final class GameScreen extends Screen {
         }
         bResume.visible = pauseMenu;
         bQuit.visible = pauseMenu;
-        boolean tabs = phase != Protocol.PHASE_OVER && !pauseMenu;
+        boolean tabs = phase != Net.PHASE_OVER && !pauseMenu;
         bTabTable.visible = tabs;
         bTabNet.visible = tabs;
         bTabConsole.visible = tabs;
@@ -434,7 +497,7 @@ public final class GameScreen extends Screen {
     private void readRoster(List<Msg> frame) {
         Map<Integer, PlayerInfo> map = new HashMap<>();
         for (Msg m : frame) {
-            if (!m.is(Protocol.PLAYER)) continue;
+            if (!m.is(Net.PLAYER)) continue;
             PlayerInfo info = new PlayerInfo();
             info.name = m.str("name");
             info.color = m.num("c", 0);
@@ -452,7 +515,7 @@ public final class GameScreen extends Screen {
         cfg = GameConfig.read(m, cfg);
         cols = cfg.cols;
         rows = cfg.rows;
-        phase = Protocol.PHASE_COUNT;
+        phase = Net.PHASE_COUNT;
         countdown = 3;
         countdownAnim = 1;
         prev = null;
@@ -487,6 +550,15 @@ public final class GameScreen extends Screen {
         bQuit.visible = false;
         closePanel();
         snapCount = 0;
+        lastSyncFen = "";
+        if (cfg.chess) {
+            chess = new Chess();
+            chessTurn = Chess.WHITE;
+            chessMyColor = app.myChessColor();
+            chessWinner = -1;
+            chessEndReason = "";
+            chessSelected = -1;
+        }
         telemetrySnapCount = 0;
         telemetryReconTotal = 0;
         telemetryBytesIn = 0;
@@ -497,8 +569,12 @@ public final class GameScreen extends Screen {
         subLastSent = -1f;
         java.util.Arrays.fill(subSentBuckets, 0);
         lastSubLogNanos = 0;
-        app.log("round started: " + cols + "×" + rows + ", " + cfg.cellsPerSec + " cells/s, "
-                + cfg.tickRate + " Hz" + (cfg.subtick ? ", subtick" : ""));
+        if (cfg.chess) {
+            app.log("chess round started: " + app.gameKindName());
+        } else {
+            app.log("round started: " + cols + "×" + rows + ", " + cfg.cellsPerSec + " cells/s, "
+                    + cfg.tickRate + " Hz" + (cfg.subtick ? ", subtick" : ""));
+        }
         Sfx.play(Sfx.Sound.START);
     }
 
@@ -545,8 +621,8 @@ public final class GameScreen extends Screen {
 
         reconcile(snap);
 
-        if (phase != Protocol.PHASE_RUNNING) {
-            phase = Protocol.PHASE_RUNNING;
+        if (phase != Net.PHASE_RUNNING) {
+            phase = Net.PHASE_RUNNING;
             countdown = 0;
             if (first || goFlash <= 0) goFlash = 1;
         }
@@ -577,11 +653,17 @@ public final class GameScreen extends Screen {
     }
 
     
+    private void sendChessMove(int from, int to, int promotion) {
+        app.send(Msg.of(Net.CHESS_MOVE).put("p", app.myId()).put("f", from).put("t", to).put("pr", promotion));
+    }
+
     private void handleInput(int dir) {
         if (chatOpen || predictor == null || app.client() == null) return;
+        if (cfg.chess) return;
         ClockSync clock = app.client().clock();
-        int tick = serverClock.tickAt(clock) + serverClock.leadTicks(clock);
+        int tick = serverClock.tickAt(clock);
         float sub = (float) serverClock.subAt(clock);
+        sub = Math.max(0f, Math.min(0.999f, sub));
         InputCommand command = predictor.push(dir, tick, sub);
         if (command == null) return;
         long stamp = serverClock.timeOfTickNanos(command.tick, command.sub, clock);
@@ -598,7 +680,7 @@ public final class GameScreen extends Screen {
                     + " sub=" + String.format(java.util.Locale.ROOT, "%.3f", command.sub)
                     + " dir=" + name);
         }
-        app.send(Msg.of(Protocol.IN)
+        app.send(Msg.of(Net.IN)
                 .put("d", dir)
                 .put("t", command.tick)
                 .put("s", String.format(java.util.Locale.ROOT, "%.3f", command.sub))
@@ -611,7 +693,7 @@ public final class GameScreen extends Screen {
         int colorIdx = info == null ? 0 : info.color;
         Color c = Theme.player(colorIdx);
         boolean mine = e.player == app.myId();
-        if (e.kind == Protocol.EV_EAT) {
+        if (e.kind == Net.EV_EAT) {
             burst(e.x, e.y, c, 10, 2.2);
             if (mine) {
                 Sfx.play(Sfx.Sound.EAT);
@@ -674,7 +756,7 @@ public final class GameScreen extends Screen {
         goFlash = Math.max(0, goFlash - dt * 1.4);
         shake = Math.max(0, shake - dt * 2.4);
         pauseAnim += ((pauseMenu ? 1 : 0) - pauseAnim) * Math.min(1, dt * 14);
-        if (phase == Protocol.PHASE_RUNNING) runTime += dt;
+        if (phase == Net.PHASE_RUNNING) runTime += dt;
 
         boolean dead = cur != null && cur.snake(app.myId()) != null && !cur.snake(app.myId()).alive;
         deadBanner += ((dead ? 1 : 0) - deadBanner) * Math.min(1, dt * 5);
@@ -752,7 +834,7 @@ public final class GameScreen extends Screen {
             }
         }
 
-        boolean tabs = phase != Protocol.PHASE_OVER && !pauseMenu;
+        boolean tabs = phase != Net.PHASE_OVER && !pauseMenu;
         bTabTable.visible = tabs;
         bTabNet.visible = tabs;
         bTabConsole.visible = tabs;
@@ -763,7 +845,7 @@ public final class GameScreen extends Screen {
         bTabChat.selected = panelOpen && tab == TAB_CHAT;
 
         if (predictor != null && predictor.ready() && app.client() != null
-                && phase == Protocol.PHASE_RUNNING) {
+                && phase == Net.PHASE_RUNNING) {
             ClockSync clock = app.client().clock();
             double pos = serverClock.tickPosition(clock);
             renderTick = (int) Math.floor(pos);
@@ -806,14 +888,14 @@ public final class GameScreen extends Screen {
 
     private void sendChat() {
         String text = chatField.getText().trim();
-        if (!text.isEmpty()) app.send(Msg.of(Protocol.CHAT).putStr("text", text));
+        if (!text.isEmpty()) app.send(Msg.of(Net.CHAT).putStr("text", text));
         chatField.setText("");
         closePanel();
     }
 
     
     private void paintChatHud(Graphics2D g) {
-        if (!panelOpen && !pauseMenu && phase != Protocol.PHASE_OVER) {
+        if (!panelOpen && !pauseMenu && phase != Net.PHASE_OVER) {
             if (!chatLines.isEmpty()) {
                 int from = Math.max(0, chatLines.size() - 3);
                 int count = chatLines.size() - from;
@@ -1181,14 +1263,20 @@ public final class GameScreen extends Screen {
         g.setColor(Theme.ACCENT);
         g.fill(new Ellipse2D.Double(119, 17, 6, 6));
 
-        String info = cols + "×" + rows + "  ·  " + cfg.cellsPerSec + " cells/s  ·  " + cfg.tickRate + " Hz"
-                + (cfg.subtick ? " · subtick" : "") + "  ·  "
-                + (cfg.walls ? "walls" : "wrap")
-                + (app.client() == null ? "" : "  ·  " + app.client().protocol());
+        String info;
+        if (cfg.chess) {
+            info = "CHESS  ·  " + (chessTurn == Chess.WHITE ? "white to move" : "black to move")
+                    + (app.client() == null ? "" : "  ·  " + app.client().protocol());
+        } else {
+            info = cols + "×" + rows + "  ·  " + cfg.cellsPerSec + " cells/s  ·  " + cfg.tickRate + " Hz"
+                    + (cfg.subtick ? " · subtick" : "") + "  ·  "
+                    + (cfg.walls ? "walls" : "wrap")
+                    + (app.client() == null ? "" : "  ·  " + app.client().protocol());
+        }
         Brush.text(g, info, 136, 27, Theme.font(11), Theme.MUTED);
 
-        int total = 0;
-        if (cur != null) total = cur.snakes.size();
+        int total = cfg.chess ? 2 : 0;
+        if (!cfg.chess && cur != null) total = cur.snakes.size();
         int ping = app.client() == null ? -1 : app.client().rttMs();
         String right = "PLAYERS " + total
                 + "   ·   " + timeString(runTime)
@@ -1218,6 +1306,11 @@ public final class GameScreen extends Screen {
             }
         }
 
+        if (cfg.chess) {
+            paintChessBoard(g);
+            return;
+        }
+
         if (cur == null) {
             Brush.centered(g, "Waiting for the start…", boardX + boardW / 2, boardY + boardH / 2, Theme.font(18), Theme.MUTED);
             return;
@@ -1238,6 +1331,48 @@ public final class GameScreen extends Screen {
                 return new Color(0xA4, 0x8B, 0xD4);
             default:
                 return Theme.YELLOW;
+        }
+    }
+
+    private void paintChessBoard(Graphics2D g) {
+        Shape outer = Brush.round(boardX, boardY, boardW, boardH, 8);
+        g.setColor(new Color(0x0A, 0x0D, 0x12));
+        g.fill(outer);
+        g.setColor(Theme.alpha(Theme.LINE, 200));
+        g.setStroke(new BasicStroke(1.6f));
+        g.draw(outer);
+        double cs = Math.min(boardW, boardH) / 8.0;
+        double bx0 = boardX + (boardW - cs * 8) / 2;
+        double by0 = boardY + (boardH - cs * 8) / 2;
+        boolean flip = chessMyColor == Chess.BLACK;
+        java.util.List<Chess.Move> targets = chessSelected >= 0 && chessTurn == chessMyColor
+                ? chess.legalMoves() : java.util.List.of();
+        for (int r = 0; r < 8; r++) {
+            for (int f = 0; f < 8; f++) {
+                int rank = flip ? r : 7 - r;
+                int file = flip ? 7 - f : f;
+                int sq = rank * 8 + file;
+                Color bg = (r + f) % 2 == 0 ? new Color(0x2E, 0x38, 0x46) : new Color(0x22, 0x2B, 0x3A);
+                if (sq == chessSelected) bg = Theme.shade(bg, 0.35);
+                g.setColor(bg);
+                g.fill(new Rectangle2D.Double(bx0 + f * cs, by0 + r * cs, cs, cs));
+                boolean target = false;
+                for (Chess.Move move : targets) if (move.to == sq) target = true;
+                int p = chess.at(sq);
+                if (target) {
+                    g.setColor(Theme.alpha(Theme.ACCENT, p == 0 ? 150 : 90));
+                    double rr = p == 0 ? cs * 0.16 : cs * 0.42;
+                    g.fill(new Ellipse2D.Double(bx0 + f * cs + cs / 2 - rr, by0 + r * cs + cs / 2 - rr, rr * 2, rr * 2));
+                }
+                if (p == 0) continue;
+                int type = (p - 1) % 6 + 1;
+                char letter = "KQRBNP".charAt(type - 1);
+                if (p >= 7) letter = Character.toLowerCase(letter);
+                float size = (float) Math.min(34, cs * 0.8);
+                g.setFont(Theme.semibold(size));
+                g.setColor(p >= 7 ? new Color(0xE0, 0x8A, 0x44) : new Color(0xE6, 0xEC, 0xF7));
+                g.drawString(String.valueOf(letter), (float) (bx0 + f * cs + cs * 0.28), (float) (by0 + r * cs + cs * 0.5));
+            }
         }
     }
 
@@ -1516,7 +1651,7 @@ public final class GameScreen extends Screen {
 
     private void paintOverlays(Graphics2D g) {
         
-        if (phase == Protocol.PHASE_COUNT && countdown > 0) {
+        if (phase == Net.PHASE_COUNT && countdown > 0) {
             g.setColor(new Color(0, 0, 0, 110));
             g.fill(Brush.round(boardX, boardY, boardW, boardH, 8));
             double cx = boardX + boardW / 2;
@@ -1527,7 +1662,7 @@ public final class GameScreen extends Screen {
             Brush.glowText(g, String.valueOf(countdown), cx, cy + 40, Theme.display(size),
                     Theme.alpha(Theme.TEXT, alpha), Theme.ACCENT, 4);
         }
-        if (goFlash > 0.01 && phase == Protocol.PHASE_RUNNING && countdown == 0) {
+        if (goFlash > 0.01 && phase == Net.PHASE_RUNNING && countdown == 0) {
             double k = goFlash;
             double cx = boardX + boardW / 2;
             double cy = boardY + boardH * 0.30;
@@ -1536,7 +1671,7 @@ public final class GameScreen extends Screen {
         }
 
         
-        if (deadBanner > 0.02 && phase == Protocol.PHASE_RUNNING) {
+        if (deadBanner > 0.02 && phase == Net.PHASE_RUNNING) {
             int a = (int) (200 * deadBanner);
             g.setColor(new Color(0x18, 0x08, 0x0C, a));
             g.fill(new RoundRectangle2D.Double(boardX + boardW / 2 - 150, boardY + 16, 300, 38, 19, 19));
@@ -1545,7 +1680,7 @@ public final class GameScreen extends Screen {
         }
 
         
-        if (phase == Protocol.PHASE_OVER && results != null) {
+        if (phase == Net.PHASE_OVER && results != null) {
             g.setColor(new Color(0, 0, 0, 175));
             g.fillRect(0, 0, VW, VH);
             g.setColor(new Color(0x0C, 0x15, 0x24, 250));

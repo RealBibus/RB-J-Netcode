@@ -1,37 +1,42 @@
-package snakenet.net;
+package netcore.netcode;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-
-
-
-
-
-
+/**
+ * One wire message. The type must be a declared {@link MsgType} (normally an RPC created
+ * in game code); the engine never invents game message names.
+ */
 public final class Msg {
 
-    
     public static final String END = "END";
 
-    private final String type;
+    private final MsgType type;
     private final Map<String, String> fields = new LinkedHashMap<>();
 
-    private Msg(String type) {
+    private Msg(MsgType type) {
+        if (type == null) throw new IllegalArgumentException("type is required");
         this.type = type;
     }
 
-    public static Msg of(String type) {
+    public static Msg of(MsgType type) {
         return new Msg(type);
+    }
+
+    public static Msg of(Rpc<?> rpc) {
+        return new Msg(rpc.type());
     }
 
     public static Msg parse(String line) {
         if (line == null) return null;
         String[] parts = line.split("\\|", -1);
         if (parts.length == 0 || parts[0].isBlank()) return null;
-        Msg m = new Msg(parts[0].trim());
+        MsgType type = MsgType.find(parts[0].trim());
+        if (type == null) return null;
+        Msg m = new Msg(type);
         for (int i = 1; i < parts.length; i++) {
             int eq = parts[i].indexOf('=');
             if (eq <= 0) continue;
@@ -40,12 +45,20 @@ public final class Msg {
         return m;
     }
 
-    public String type() {
+    public MsgType type() {
         return type;
     }
 
-    public boolean is(String t) {
-        return type.equals(t);
+    public String typeName() {
+        return type.name();
+    }
+
+    public boolean is(MsgType t) {
+        return type == t;
+    }
+
+    public boolean is(Rpc<?> rpc) {
+        return rpc != null && type == rpc.type();
     }
 
     public Msg put(String k, Object v) {
@@ -53,7 +66,6 @@ public final class Msg {
         return this;
     }
 
-    
     public Msg putStr(String k, String v) {
         fields.put(k, enc(v));
         return this;
@@ -84,6 +96,14 @@ public final class Msg {
         }
     }
 
+    public double numD(String k, double def) {
+        try {
+            return Double.parseDouble(raw(k));
+        } catch (NumberFormatException e) {
+            return def;
+        }
+    }
+
     public boolean bool(String k) {
         String v = raw(k);
         return "1".equals(v) || "true".equals(v);
@@ -93,8 +113,22 @@ public final class Msg {
         return fields.containsKey(k);
     }
 
+    public Map<String, String> rawFields() {
+        return Collections.unmodifiableMap(fields);
+    }
+
+    public int size() {
+        return fields.size();
+    }
+
+    public Msg copy() {
+        Msg m = new Msg(type);
+        m.fields.putAll(fields);
+        return m;
+    }
+
     public String encode() {
-        StringBuilder sb = new StringBuilder(type);
+        StringBuilder sb = new StringBuilder(type.name());
         for (Map.Entry<String, String> e : fields.entrySet()) {
             sb.append('|').append(e.getKey()).append('=').append(e.getValue());
         }
@@ -106,12 +140,12 @@ public final class Msg {
         return encode();
     }
 
-    static String enc(String s) {
+    public static String enc(String s) {
         if (s == null || s.isEmpty()) return "";
         return Base64.getUrlEncoder().withoutPadding().encodeToString(s.getBytes(StandardCharsets.UTF_8));
     }
 
-    static String dec(String s) {
+    public static String dec(String s) {
         if (s == null || s.isEmpty()) return "";
         try {
             return new String(Base64.getUrlDecoder().decode(s), StandardCharsets.UTF_8);

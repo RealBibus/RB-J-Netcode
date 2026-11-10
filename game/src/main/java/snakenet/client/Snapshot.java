@@ -1,7 +1,7 @@
 package snakenet.client;
 
-import snakenet.net.Msg;
-import snakenet.net.Protocol;
+import netcore.netcode.Msg;
+import snakenet.net.Net;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -80,7 +80,7 @@ public final class Snapshot {
         Snapshot snap = null;
         Msg head = null;
         for (Msg m : frame) {
-            if (m.is(Protocol.SNAP)) {
+            if (m.is(Net.SNAP)) {
                 head = m;
                 snap = new Snapshot(m.num("t", 0), m.numL("st", 0L), m.num("rate", 32), m.num("ms", 0), recvNanos);
                 break;
@@ -111,52 +111,43 @@ public final class Snapshot {
             }
         }
         for (Msg m : frame) {
-            switch (m.type()) {
-                case Protocol.FOOD: {
-                    FoodView f = new FoodView();
-                    f.x = m.num("x", 0);
-                    f.y = m.num("y", 0);
-                    f.kind = m.num("k", 0);
-                    snap.food.add(f);
-                    break;
-                }
-                case Protocol.SNAKE: {
-                    SnakeView s = new SnakeView();
-                    s.id = m.num("p", -1);
-                    s.score = m.num("sc", 0);
-                    s.dir = m.num("d", 1);
-                    s.color = m.num("c", 0);
-                    s.alive = m.num("a", 0) == 1;
-                    s.ackSeq = m.num("ls", 0);
-                    s.acc = m.num("ac", 0);
-                    s.ping = m.num("pg", -1);
-                    String g = m.raw("g");
-                    if (!g.isEmpty()) {
-                        String[] parts = g.split(",");
-                        int n = parts.length;
-                        s.xs = new int[n];
-                        s.ys = new int[n];
-                        for (int i = 0; i < n; i++) {
-                            int c = parts[i].indexOf(':');
-                            if (c <= 0) continue;
-                            s.xs[i] = Integer.parseInt(parts[i].substring(0, c));
-                            s.ys[i] = Integer.parseInt(parts[i].substring(c + 1));
-                        }
+            if (m.is(Net.FOOD)) {
+                FoodView f = new FoodView();
+                f.x = m.num("x", 0);
+                f.y = m.num("y", 0);
+                f.kind = m.num("k", 0);
+                snap.food.add(f);
+            } else if (m.is(Net.SNAKE)) {
+                SnakeView s = new SnakeView();
+                s.id = m.num("p", -1);
+                s.score = m.num("sc", 0);
+                s.dir = m.num("d", 1);
+                s.color = m.num("c", 0);
+                s.alive = m.num("a", 0) == 1;
+                s.ackSeq = m.num("ls", 0);
+                s.acc = m.num("ac", 0);
+                s.ping = m.num("pg", -1);
+                String g = m.raw("g");
+                if (!g.isEmpty()) {
+                    String[] parts = g.split(",");
+                    int n = parts.length;
+                    s.xs = new int[n];
+                    s.ys = new int[n];
+                    for (int i = 0; i < n; i++) {
+                        int c = parts[i].indexOf(':');
+                        if (c <= 0) continue;
+                        s.xs[i] = Integer.parseInt(parts[i].substring(0, c));
+                        s.ys[i] = Integer.parseInt(parts[i].substring(c + 1));
                     }
-                    snap.snakes.add(s);
-                    break;
                 }
-                case Protocol.EVENT: {
-                    EventView e = new EventView();
-                    e.kind = m.num("k", 0);
-                    e.player = m.num("p", -1);
-                    e.x = m.num("x", 0);
-                    e.y = m.num("y", 0);
-                    snap.events.add(e);
-                    break;
-                }
-                default:
-                    break;
+                snap.snakes.add(s);
+            } else if (m.is(Net.EVENT)) {
+                EventView e = new EventView();
+                e.kind = m.num("k", 0);
+                e.player = m.num("p", -1);
+                e.x = m.num("x", 0);
+                e.y = m.num("y", 0);
+                snap.events.add(e);
             }
         }
         return snap;

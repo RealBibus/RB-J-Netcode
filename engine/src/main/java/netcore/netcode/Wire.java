@@ -1,15 +1,13 @@
-package snakenet.net;
+package netcore.netcode;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-
-
-
-
-
-
+/**
+ * Text frame codec. A frame is a set of declared messages terminated by {@code END}.
+ * Voice frames keep a separate binary prefix so they bypass the text parser.
+ */
 public final class Wire {
 
     public static final byte TEXT = 0;
@@ -49,7 +47,6 @@ public final class Wire {
         return data.length > 3 && data[0] == VOICE;
     }
 
-    
     public static byte[] voice(int seq, byte[] pcm) {
         byte[] out = new byte[pcm.length + 3];
         out[0] = VOICE;
@@ -59,7 +56,6 @@ public final class Wire {
         return out;
     }
 
-    
     public static byte[] voiceFrom(int pid, int seq, byte[] pcm) {
         byte[] out = new byte[pcm.length + 5];
         out[0] = VOICE;

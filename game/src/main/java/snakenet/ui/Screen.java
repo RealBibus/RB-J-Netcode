@@ -1,7 +1,7 @@
 package snakenet.ui;
 
 import snakenet.audio.Sfx;
-import snakenet.net.Msg;
+import netcore.netcode.Msg;
 
 import javax.swing.JPanel;
 import javax.swing.JTextField;

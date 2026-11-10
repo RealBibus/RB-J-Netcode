@@ -5,7 +5,7 @@ import netcore.predict.PredictionConfig;
 import netcore.time.TickConfig;
 import netcore.voice.VoiceConfig;
 import netcore.voice.VoiceMode;
-import snakenet.net.Msg;
+import netcore.netcode.Msg;
 
 public final class GameConfig {
 
@@ -33,6 +33,12 @@ public final class GameConfig {
     public int maxCatchUp = 4;
     public int spinWindowMicros = 900;
     public int tickPriority = Thread.NORM_PRIORITY + 1;
+
+    public boolean chess = false;
+    /** Chess colour choice: 0 = white, 1 = black, 2 = random. */
+    public int chessSide = 0;
+    /** Chess bot search depth (1..4). */
+    public int chessBotDepth = 2;
 
     public double predictionSnap = 2.2;
     public int predictionHistory = 48;
@@ -86,6 +92,9 @@ public final class GameConfig {
         c.maxCatchUp = maxCatchUp;
         c.spinWindowMicros = spinWindowMicros;
         c.tickPriority = tickPriority;
+        c.chess = chess;
+        c.chessSide = chessSide;
+        c.chessBotDepth = chessBotDepth;
         c.predictionSnap = predictionSnap;
         c.predictionHistory = predictionHistory;
         c.maxAdvanceTicks = maxAdvanceTicks;
@@ -226,7 +235,8 @@ public final class GameConfig {
                 .put("walls", walls ? 1 : 0).put("max", maxPlayers)
                 .put("udp", udp ? 1 : 0)
                 .put("vo", voice ? 1 : 0).put("vm", voiceMode)
-                .put("vj", voiceJitterTarget).put("vx", voiceJitterMax);
+                .put("vj", voiceJitterTarget).put("vx", voiceJitterMax).put("cg", chess ? 1 : 0)
+                .put("cs", chessSide).put("cd", chessBotDepth);
     }
 
     public static GameConfig read(Msg m, GameConfig def) {
@@ -244,6 +254,9 @@ public final class GameConfig {
         if (m.has("vm")) c.voiceMode = clamp(m.num("vm", c.voiceMode), 0, 1);
         if (m.has("vj")) c.voiceJitterTarget = clamp(m.num("vj", c.voiceJitterTarget), 1, 16);
         if (m.has("vx")) c.voiceJitterMax = clamp(m.num("vx", c.voiceJitterMax), c.voiceJitterTarget, 64);
+        if (m.has("cg")) c.chess = m.num("cg", c.chess ? 1 : 0) == 1;
+        if (m.has("cs")) c.chessSide = clamp(m.num("cs", c.chessSide), 0, 2);
+        if (m.has("cd")) c.chessBotDepth = clamp(m.num("cd", c.chessBotDepth), 1, 4);
         return c;
     }
 

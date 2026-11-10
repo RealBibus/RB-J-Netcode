@@ -16,6 +16,8 @@ public final class HomeScreen extends Screen {
     private final InputField nameField;
     private final NeonButton bCreate;
     private final NeonButton bJoin;
+    private final NeonButton bSnake;
+    private final NeonButton bChess;
     private final NeonButton bSound;
     private final NeonButton bFirewall;
 
@@ -31,20 +33,42 @@ public final class HomeScreen extends Screen {
 
         nameField = new InputField("name");
         nameField.setText(app.prefs().get("name", app.myName()));
-        addField(nameField, 56, 126, 300, 38, 13);
+        addField(nameField, 56, 118, 300, 38, 13);
 
-        bCreate = add(new NeonButton("Create game", NeonButton.Style.PRIMARY, 56, 186, 248, 50, () -> {
+        bSnake = add(new NeonButton("SNAKE", NeonButton.Style.CHIP, 56, 168, 120, 32, () -> {
+            app.setGameKind(snakenet.net.Net.KIND_SNAKE);
+            updateKind();
+        }));
+        bChess = add(new NeonButton("CHESS", NeonButton.Style.CHIP, 184, 168, 120, 32, () -> {
+            app.setGameKind(snakenet.net.Net.KIND_CHESS);
+            updateKind();
+        }));
+
+        bCreate = add(new NeonButton("CREATE MATCH", NeonButton.Style.PRIMARY, 56, 212, 248, 50, () -> {
             app.setNameAndColor(nameField.getText(), app.myColor());
             win.show(app.hostScreen());
         }));
-        bJoin = add(new NeonButton("Join game", NeonButton.Style.SECONDARY, 316, 186, 248, 50, () -> {
+        bJoin = add(new NeonButton("JOIN GAME", NeonButton.Style.SECONDARY, 316, 212, 248, 50, () -> {
             app.setNameAndColor(nameField.getText(), app.myColor());
             win.show(app.joinScreen());
         }));
-        bSound = add(new NeonButton("", NeonButton.Style.CHIP, 56, 252, 120, 28, this::toggleSound));
-        bFirewall = add(new NeonButton("firewall", NeonButton.Style.CHIP, 184, 252, 120, 28, () ->
+        bSound = add(new NeonButton("", NeonButton.Style.CHIP, 56, 278, 120, 28, this::toggleSound));
+        bFirewall = add(new NeonButton("firewall", NeonButton.Style.CHIP, 184, 278, 120, 28, () ->
                 app.toast("If friends cannot see your game, run allow-firewall.bat as administrator")));
         updateSoundLabel();
+        updateKind();
+    }
+
+    private void updateKind() {
+        boolean chess = app.gameKind() == snakenet.net.Net.KIND_CHESS;
+        bSnake.selected = !chess;
+        bChess.selected = chess;
+        bCreate.label = chess ? "CREATE MATCH" : "CREATE GAME";
+    }
+
+    @Override
+    public void onShow() {
+        updateKind();
     }
 
     private void updateSoundLabel() {
@@ -89,7 +113,7 @@ public final class HomeScreen extends Screen {
         g.draw(new Line2D.Double(0, 47.5, VW, 47.5));
 
         Brush.text(g, "SNAKE.NET", 32, 30, Theme.bold(16), Theme.TEXT);
-        Brush.text(g, "// netcode test bench", 148, 30, Theme.font(12), Theme.MUTED);
+        Brush.text(g, "// netcode test bench · snake + chess", 148, 30, Theme.font(12), Theme.MUTED);
         Brush.right(g, "v2.0  //  netcore " + netcore.NetCore.VERSION, 1248, 30, Theme.font(11), Theme.DIM);
 
         boolean connected = app.client() != null;
@@ -102,13 +126,10 @@ public final class HomeScreen extends Screen {
     private void paintSession(Graphics2D g) {
         Brush.panelTitled(g, 32, 64, 560, 266, "SESSION");
 
-        Brush.text(g, "PLAYER NAME", 56, 118, Theme.font(10), Theme.MUTED);
-
-        Brush.text(g, "HOST A SERVER ON THIS COMPUTER", 56, 178, Theme.font(10), Theme.MUTED);
-        Brush.text(g, "OR JOIN BY HOST ADDRESS", 316, 178, Theme.font(10), Theme.MUTED);
+        Brush.text(g, "PLAYER NAME", 56, 110, Theme.font(10), Theme.MUTED);
 
         Brush.text(g, "K — voice in game,  ESC — menu,  arrows/WASD — turn",
-                56, 306, Theme.font(11), Theme.DIM);
+                56, 316, Theme.font(11), Theme.DIM);
     }
 
     private void paintSystem(Graphics2D g) {

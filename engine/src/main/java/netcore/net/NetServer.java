@@ -97,6 +97,8 @@ public final class NetServer implements AutoCloseable {
         }
 
         running = true;
+        System.out.println("[netcore] server up udpPort=" + (udpSocket != null ? udpSocket.getLocalPort() : -1)
+                + " tcpPort=" + (serverSocket != null ? serverSocket.getLocalPort() : -1));
         if (serverSocket != null) {
             acceptThread = new Thread(this::acceptLoop, "netcore-accept");
             acceptThread.setDaemon(true);
@@ -309,6 +311,7 @@ public final class NetServer implements AutoCloseable {
 
     public synchronized void stop() {
         running = false;
+        System.out.println("[netcore] server down");
         if (pingThread != null) pingThread.interrupt();
         try {
             if (serverSocket != null) serverSocket.close();

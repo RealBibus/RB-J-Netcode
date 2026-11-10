@@ -2,6 +2,7 @@ package snakenet.ui;
 
 import netcore.net.NetInfo;
 import snakenet.game.GameConfig;
+import snakenet.net.Net;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -11,6 +12,9 @@ import java.awt.geom.RoundRectangle2D;
 import java.io.IOException;
 
 public final class HostScreen extends Screen {
+
+    private static final String[] CHESS_SIDES = {"White", "Black", "Random"};
+    private static final String[] CHESS_DEPTHS = {"1 ply", "2 ply", "3 ply", "4 ply"};
 
     private final InputField nameField;
     private final InputField portField;
@@ -23,12 +27,18 @@ public final class HostScreen extends Screen {
     private boolean walls = true;
     private int color;
 
+    private int chessSide;
+    private int chessBotDepth = 2;
+
     private final NeonButton[] sizeChips = new NeonButton[4];
     private final NeonButton[] speedChips = new NeonButton[4];
     private final NeonButton[] tickChips = new NeonButton[4];
+    private final NeonButton[] sideChips = new NeonButton[3];
+    private final NeonButton[] depthChips = new NeonButton[4];
     private final NeonButton bWalls;
     private final NeonButton bSubtick;
     private final NeonButton bTcp;
+    private NeonButton bStandalone;
     private final NeonButton bStart;
 
     public HostScreen(App app) {
@@ -60,6 +70,19 @@ public final class HostScreen extends Screen {
                 tickIndex = idx;
                 syncChips();
             }));
+            depthChips[i] = add(new NeonButton(CHESS_DEPTHS[i], NeonButton.Style.CHIP,
+                    660 + i * 118, 334, 110, 42, () -> {
+                chessBotDepth = idx + 1;
+                syncChips();
+            }));
+        }
+        for (int i = 0; i < CHESS_SIDES.length; i++) {
+            final int idx = i;
+            sideChips[i] = add(new NeonButton(CHESS_SIDES[i], NeonButton.Style.CHIP,
+                    660 + i * 158, 258, 140, 42, () -> {
+                chessSide = idx;
+                syncChips();
+            }));
         }
         bWalls = add(new NeonButton("Wall death", NeonButton.Style.CHIP, 660, 486, 260, 44, () -> {
             walls = !walls;
@@ -73,6 +96,10 @@ public final class HostScreen extends Screen {
             udp = !udp;
             syncChips();
         }));
+        bStandalone = add(new NeonButton("Standalone server build", NeonButton.Style.CHIP, 100, 594, 340, 44, () -> {
+            app.setStandaloneServer(!app.standaloneServer());
+            syncChips();
+        }));
         add(new NeonButton("Back", NeonButton.Style.SECONDARY, 56, 44, 100, 42, () -> win.show(app.homeScreen())));
         bStart = add(new NeonButton("START SERVER", NeonButton.Style.PRIMARY, 56, 676, 360, 64, this::startServer));
 
@@ -83,17 +110,41 @@ public final class HostScreen extends Screen {
         syncChips();
     }
 
+    private boolean chessMode() {
+        return app.gameKind() == Net.KIND_CHESS;
+    }
+
+    @Override
+    public void onShow() {
+        nameField.setText(app.prefs().get("name", app.myName()));
+        syncChips();
+    }
+
     private void syncChips() {
+        boolean chess = chessMode();
         for (int i = 0; i < 4; i++) {
+            sizeChips[i].visible = !chess;
+            speedChips[i].visible = !chess;
+            tickChips[i].visible = !chess;
+            depthChips[i].visible = chess;
             sizeChips[i].selected = i == sizeIndex;
             speedChips[i].selected = i == speedIndex;
             tickChips[i].selected = i == tickIndex;
+            depthChips[i].selected = chess && i == chessBotDepth - 1;
+            if (i < sideChips.length) {
+                sideChips[i].visible = chess;
+                sideChips[i].selected = chess && i == chessSide;
+            }
         }
+        bWalls.visible = !chess;
+        bSubtick.visible = !chess;
         bWalls.selected = walls;
         bWalls.label = walls ? "Wall death" : "Pass through walls";
         bSubtick.selected = subtick;
         bTcp.selected = udp;
         bTcp.label = udp ? "Transport: UDP" : "Transport: TCP";
+        bStandalone.selected = app.standaloneServer();
+        bStart.label = chess ? "CREATE MATCH" : "START SERVER";
     }
 
     private void startServer() {
@@ -119,7 +170,13 @@ public final class HostScreen extends Screen {
         cfg.subtick = subtick;
         cfg.walls = walls;
         cfg.udp = udp;
-        cfg.serverName = name;
+        cfg.chess = chessMode();
+        cfg.chessSide = chessSide;
+        cfg.chessBotDepth = chessBotDepth;
+        if (cfg.chess) cfg.maxPlayers = 2;
+        cfg.serverName = name + (cfg.chess ? "'s chess" : "'s snake");
+        app.setGameKind(cfg.chess ? Net.KIND_CHESS : Net.KIND_SNAKE);
+        app.setStandaloneServer(app.standaloneServer());
         app.prefs().set("port", port);
         try {
             app.hostGame(port, cfg, name, color);
@@ -135,8 +192,12 @@ public final class HostScreen extends Screen {
 
     @Override
     protected void paintScreen(Graphics2D g) {
-        Brush.text(g, "Create game", 56, 136, Theme.display(42), Theme.TEXT);
-        Brush.text(g, "You are the host: everyone else only needs your address", 58, 166, Theme.font(15), Theme.MUTED);
+        boolean chess = chessMode();
+        Brush.text(g, chess ? "Create chess match" : "Create snake game", 56, 136,
+                Theme.display(42), Theme.TEXT);
+        Brush.text(g, chess ? "Start a server and open a two-player chess lobby"
+                        : "You are the host: everyone else only needs your address",
+                58, 166, Theme.font(15), Theme.MUTED);
 
         Brush.panel(g, 56, 196, 1168, 440, 26);
 
@@ -163,15 +224,24 @@ public final class HostScreen extends Screen {
 
         Brush.divider(g, 620, 226, 620, 606, new Color(0x2E, 0x38, 0x46, 190));
 
-        Brush.text(g, "BOARD SIZE", 660, 244, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "SPEED", 660, 320, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "TICK RATE", 660, 396, Theme.semibold(11), Theme.MUTED);
-        Brush.text(g, "WALLS", 660, 472, Theme.semibold(11), Theme.MUTED);
+        if (chess) {
+            Brush.text(g, "YOUR COLOUR", 660, 244, Theme.semibold(11), Theme.MUTED);
+            Brush.text(g, "BOT DIFFICULTY", 660, 320, Theme.semibold(11), Theme.MUTED);
+            Brush.text(g, "Chess is a separate game: two players, one board,", 660, 430,
+                    Theme.font(14), Theme.TEXT);
+            Brush.text(g, "a lone host gets a bot opponent automatically.", 660, 452,
+                    Theme.font(13), Theme.MUTED);
+        } else {
+            Brush.text(g, "BOARD SIZE", 660, 244, Theme.semibold(11), Theme.MUTED);
+            Brush.text(g, "SPEED", 660, 320, Theme.semibold(11), Theme.MUTED);
+            Brush.text(g, "TICK RATE", 660, 396, Theme.semibold(11), Theme.MUTED);
+            Brush.text(g, "WALLS", 660, 472, Theme.semibold(11), Theme.MUTED);
 
-        int[] size = GameConfig.SIZE[sizeIndex];
-        Brush.text(g, "Board " + size[0] + "×" + size[1] + " · " + GameConfig.SPEED_CELLS[speedIndex] + " cells/s · "
-                        + GameConfig.TICK_RATES[tickIndex] + " ticks/s",
-                1000, 244, Theme.font(13), Theme.MUTED);
+            int[] size = GameConfig.SIZE[sizeIndex];
+            Brush.text(g, "Board " + size[0] + "×" + size[1] + " · " + GameConfig.SPEED_CELLS[speedIndex]
+                            + " cells/s · " + GameConfig.TICK_RATES[tickIndex] + " ticks/s",
+                    1000, 244, Theme.font(13), Theme.MUTED);
+        }
 
         g.setColor(new Color(0x1B, 0x22, 0x2C, 235));
         g.fill(new RoundRectangle2D.Double(660, 548, 470, 74, 16, 16));

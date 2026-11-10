@@ -3,23 +3,38 @@ package snakenet.ui;
 import snakenet.Prefs;
 import snakenet.audio.Sfx;
 import snakenet.client.GameClient;
+import snakenet.client.RoomView;
+import snakenet.game.Chess;
 import snakenet.game.GameConfig;
-import snakenet.net.Msg;
+import netcore.netcode.Msg;
 import netcore.net.NetInfo;
 import netcore.voice.VoiceEngine;
-import snakenet.net.Protocol;
+import snakenet.net.Net;
 import snakenet.server.GameServer;
 
 import javax.swing.SwingUtilities;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 public final class App {
 
+    /** One lobby as advertised by the hub. */
+    public static final class RoomInfo {
+        public int id;
+        public int kind;
+        public int players;
+        public int max;
+        public int phase;
+        public String name = "";
+    }
+
     private final Prefs prefs;
     private final Backdrop backdrop = new Backdrop();
     private final GameConfig netDefaults = new GameConfig();
+    private final RoomView roomView = new RoomView();
     private String voiceKey = "";
+    private boolean standaloneServer = true;
 
     private MainWindow window;
     private GameClient client;
@@ -29,14 +44,25 @@ public final class App {
     private int myId = -1;
     private String myName = "";
     private int myColor;
+    private int myChessColor = Chess.WHITE;
     private String gameAddress = "";
-    private boolean hostGame;
+    private int gameKind = Net.KIND_SNAKE;
+    private boolean roomHost;
+
+    private int hubSid = -1;
+    private String serverName = "";
+    private int roomId = -1;
+    private String roomName = "";
+    private boolean inLobby;
+    private GameConfig pendingCreate;
+    private final List<RoomInfo> hubRooms = new ArrayList<>();
 
     private final String sessionToken = java.util.UUID.randomUUID().toString();
 
     private HomeScreen home;
     private HostScreen hostScreen;
     private JoinScreen joinScreen;
+    private BrowserScreen browser;
     private LobbyScreen lobby;
     private GameScreen game;
 
@@ -71,7 +97,7 @@ public final class App {
     }
 
     public void setPreviewHost(boolean host) {
-        this.hostGame = host;
+        this.roomHost = host;
     }
 
     public void setPreviewId(int id) {
@@ -115,6 +141,11 @@ public final class App {
         return joinScreen;
     }
 
+    public BrowserScreen browserScreen() {
+        if (browser == null) browser = new BrowserScreen(this);
+        return browser;
+    }
+
     public LobbyScreen lobbyScreen() {
         if (lobby == null) lobby = new LobbyScreen(this);
         return lobby;
@@ -133,6 +164,10 @@ public final class App {
         return server;
     }
 
+    public RoomView roomView() {
+        return roomView;
+    }
+
     public int myId() {
         return myId;
     }
@@ -145,12 +180,65 @@ public final class App {
         return myColor;
     }
 
+    public int myChessColor() {
+        return myChessColor;
+    }
+
     public String gameAddress() {
         return gameAddress;
     }
 
+    public int gameKind() {
+        return gameKind;
+    }
+
+    public void setGameKind(int kind) {
+        this.gameKind = kind == Net.KIND_CHESS ? Net.KIND_CHESS : Net.KIND_SNAKE;
+    }
+
+    public String gameKindName() {
+        return Net.kindName(gameKind);
+    }
+
+    /** Room host (lobby owner), not the owner of the machine running the server. */
     public boolean isHost() {
-        return hostGame;
+        return roomHost;
+    }
+
+    public boolean ownsServer() {
+        return server != null;
+    }
+
+    public boolean standaloneServer() {
+        return standaloneServer;
+    }
+
+    public void setStandaloneServer(boolean standaloneServer) {
+        this.standaloneServer = standaloneServer;
+    }
+
+    public int hubSid() {
+        return hubSid;
+    }
+
+    public String serverName() {
+        return serverName;
+    }
+
+    public int roomId() {
+        return roomId;
+    }
+
+    public String roomName() {
+        return roomName;
+    }
+
+    public boolean inLobby() {
+        return inLobby;
+    }
+
+    public List<RoomInfo> hubRooms() {
+        return hubRooms;
     }
 
     public void setNameAndColor(String name, int color) {
@@ -160,33 +248,44 @@ public final class App {
         prefs.set("color", myColor);
     }
 
+    /**
+     * Starts a dedicated server on this machine, connects to it and asks the hub for a
+     * lobby. This is the "create game" path used by the Snake and Chess menus.
+     */
     public void hostGame(int port, GameConfig cfg, String name, int color) throws IOException {
         closeConnections();
         setNameAndColor(name, color);
+        setGameKind(cfg.chess ? Net.KIND_CHESS : Net.KIND_SNAKE);
         GameServer s = new GameServer(port, myName, cfg);
         s.start();
         server = s;
-        hostGame = true;
         gameAddress = NetInfo.primaryIp() + ":" + s.port();
+        pendingCreate = cfg.copy();
+        String selfHost = standaloneServer ? NetInfo.primaryIp() : "127.0.0.1";
         try {
-            connect("127.0.0.1", s.port());
+            connect(selfHost, s.port());
         } catch (IOException e) {
-            s.stop();
-            server = null;
-            hostGame = false;
-            throw e;
+            try {
+                connect("127.0.0.1", s.port());
+            } catch (IOException fallbackError) {
+                s.stop();
+                server = null;
+                pendingCreate = null;
+                throw fallbackError;
+            }
         }
-        window.show(lobbyScreen());
+        window.show(browserScreen());
         toast("Server started on port " + s.port());
     }
 
+    /** Connects to an existing hub and opens the lobby browser. */
     public void joinGame(String host, int port, String name, int color) throws IOException {
         closeConnections();
         setNameAndColor(name, color);
-        hostGame = false;
+        pendingCreate = null;
         gameAddress = host + ":" + port;
         connect(host, port);
-        window.show(lobbyScreen());
+        window.show(browserScreen());
     }
 
     private void connect(String host, int port) throws IOException {
@@ -232,20 +331,61 @@ public final class App {
                     if (linkRestoredVisible) toast("Connection restored");
                     GameClient c = client;
                     if (c != null) {
-                        c.send(Msg.of(Protocol.HELLO).putStr("name", myName)
+                        c.send(Msg.of(Net.HELLO).putStr("name", myName)
                                 .put("color", myColor).putStr("token", sessionToken()));
                     }
                 }
             }
         }, netDefaults.netConfig(false));
         client = holder[0];
+        client.netcode().addBehaviour(roomView);
+        client.netcode().start();
         myId = -1;
+        roomId = -1;
+        inLobby = false;
+        roomHost = false;
+        hubSid = -1;
+        hubRooms.clear();
         if (voice != null) voice.stop();
         voice = null;
         voiceKey = "";
         applyVoice(netDefaults);
-        client.send(Msg.of(Protocol.HELLO).putStr("name", myName).put("color", myColor)
+        client.send(Msg.of(Net.HELLO).putStr("name", myName).put("color", myColor)
                 .putStr("token", sessionToken()));
+    }
+
+    /** Creates a lobby on the hub we are already connected to. */
+    public void createLobby(GameConfig cfg) {
+        if (client == null) {
+            toastError("Not connected to a server");
+            return;
+        }
+        GameConfig c = cfg == null ? new GameConfig() : cfg.copy();
+        c.chess = gameKind == Net.KIND_CHESS;
+        if (c.chess) {
+            c.maxPlayers = 2;
+            if (c.serverName == null || c.serverName.isBlank()) c.serverName = myName + "'s chess";
+        } else if (c.serverName == null || c.serverName.isBlank()) {
+            c.serverName = myName + "'s snake";
+        }
+        Msg m = c.write(Net.LOBBY_CREATE.newMsg())
+                .put("kind", gameKind)
+                .putStr("name", c.serverName);
+        send(m);
+    }
+
+    public void leaveLobby() {
+        if (client != null && (inLobby || roomId >= 0)) send(Net.LOBBY_LEAVE.newMsg());
+        inLobby = false;
+        roomId = -1;
+        roomName = "";
+        roomHost = false;
+        roomView.reset();
+        window.show(browserScreen());
+    }
+
+    public void refreshHub() {
+        send(Net.LOBBY_LIST.newMsg());
     }
 
     private void applyVoice(GameConfig cfg) {
@@ -300,8 +440,15 @@ public final class App {
         GameServer s = server;
         server = null;
         if (s != null) s.stop();
-        hostGame = false;
+        roomHost = false;
         myId = -1;
+        roomId = -1;
+        roomName = "";
+        inLobby = false;
+        hubSid = -1;
+        serverName = "";
+        hubRooms.clear();
+        roomView.reset();
     }
 
     public void shutdown() {
@@ -316,14 +463,20 @@ public final class App {
             cfg.applySize(1);
             cfg.applySpeed(1);
             hostGame(NetInfo.freePortFrom(45900), cfg, myName, myColor);
-            for (int i = 0; i < 3; i++) {
-                send(Msg.of(Protocol.BOT).put("op", "add"));
-            }
-            if (autoStart) {
-                javax.swing.Timer timer = new javax.swing.Timer(700, e -> send(Msg.of(Protocol.START)));
-                timer.setRepeats(false);
-                timer.start();
-            }
+            final int[] waited = {0};
+            javax.swing.Timer wait = new javax.swing.Timer(100, null);
+            wait.addActionListener(e -> {
+                waited[0] += 100;
+                if (roomId < 0 && waited[0] < 6000) return;
+                wait.stop();
+                for (int i = 0; i < 3; i++) send(Msg.of(Net.BOT).put("op", "add"));
+                if (autoStart) {
+                    javax.swing.Timer timer = new javax.swing.Timer(700, ev -> send(Net.START.newMsg()));
+                    timer.setRepeats(false);
+                    timer.start();
+                }
+            });
+            wait.start();
         } catch (IOException e) {
             toastError("Demo failed to start: " + e.getMessage());
         }
@@ -333,39 +486,110 @@ public final class App {
         boolean start = false;
         Msg startMsg = null;
         int lobbyPhase = -1;
+        boolean hub = false;
+        List<Msg> roomMsgs = null;
         for (Msg m : frame) {
-            switch (m.type()) {
-                case Protocol.WELCOME:
-                    myId = m.num("pid", -1);
-                    log("connected, pid=" + myId + (hostGame ? " (host)" : " (client)"));
-                    break;
-                case Protocol.START:
-                    start = true;
-                    startMsg = m;
-                    break;
-                case Protocol.LOBBY:
-                    lobbyPhase = m.num("phase", -1);
-                    break;
-                case Protocol.ERR:
-                    toastError(m.str("msg"));
-                    break;
-                case Protocol.KICK:
-                    toastError(m.str("msg"));
-                    leaveToHome();
-                    return;
-                default:
-                    break;
+            if (m.is(Net.HUB)) {
+                hubSid = m.num("sid", -1);
+                serverName = m.str("server");
+                hub = true;
+            } else if (m.is(Net.ROOM)) {
+                if (roomMsgs == null) roomMsgs = new ArrayList<>();
+                roomMsgs.add(m);
+            } else if (m.is(Net.JOINED)) {
+                roomId = m.num("id", -1);
+                roomName = m.str("name");
+                setGameKind(m.num("kind", gameKind));
+                inLobby = true;
+                log("joined lobby " + roomName + " (#" + roomId + ")");
+            } else if (m.is(Net.LEFT)) {
+                inLobby = false;
+                roomId = -1;
+                roomName = "";
+                roomHost = false;
+                roomView.reset();
+                log("left the lobby");
+            } else if (m.is(Net.WELCOME)) {
+                myId = m.num("pid", -1);
+                roomHost = m.num("host", 0) == 1;
+                roomId = m.num("room", roomId);
+                String rn = m.str("roomName");
+                if (!rn.isBlank()) roomName = rn;
+                setGameKind(m.num("kind", gameKind));
+                myChessColor = m.num("cc", myChessColor);
+                applyVoice(GameConfig.read(m, netDefaults));
+                log("connected, pid=" + myId + (roomHost ? " (host)" : " (client)"));
+            } else if (m.is(Net.STARTED)) {
+                start = true;
+                startMsg = m;
+            } else if (m.is(Net.LOBBY)) {
+                lobbyPhase = m.num("phase", -1);
+            } else if (m.is(Net.ERR)) {
+                String text = m.str("msg");
+                toastError(text);
+                if (pendingCreate != null) pendingCreate = null;
+            } else if (m.is(Net.KICK)) {
+                toastError(m.str("msg"));
+                leaveToHome();
+                return;
             }
         }
+
+        updateRooms(hub, roomMsgs);
+
+        if (pendingCreate != null && hub) {
+            GameConfig cfg = pendingCreate;
+            pendingCreate = null;
+            createLobby(cfg);
+        }
+
         if (lobby != null) lobby.onFrame(frame);
         if (game != null) game.onFrame(frame);
+        if (browser != null) browser.onFrame(frame);
 
         if (start) {
             if (startMsg != null) applyVoice(GameConfig.read(startMsg, netDefaults));
             window.show(gameScreen());
+        } else if (inLobby && window.current() != lobbyScreen()) {
+            window.show(lobbyScreen());
+        } else if (!inLobby && roomId < 0 && window.current() == gameScreen()) {
+            window.show(browserScreen());
         } else if (lobbyPhase == 0 && window.current() == gameScreen()) {
             window.show(lobbyScreen());
         }
+    }
+
+    private void updateRooms(boolean hubFrame, List<Msg> roomMsgs) {
+        if (hubFrame) hubRooms.clear();
+        if (roomMsgs == null) {
+            if (hubFrame) window.show(browserScreen());
+            return;
+        }
+        for (Msg m : roomMsgs) {
+            RoomInfo info = new RoomInfo();
+            info.id = m.num("id", -1);
+            info.kind = m.num("kind", Net.KIND_SNAKE);
+            info.players = m.num("players", 0);
+            info.max = m.num("max", 0);
+            info.phase = m.num("phase", 0);
+            info.name = m.str("name");
+            RoomInfo found = null;
+            for (RoomInfo r : hubRooms) {
+                if (r.id == info.id) {
+                    found = r;
+                    break;
+                }
+            }
+            if (found == null) hubRooms.add(info);
+            else {
+                found.kind = info.kind;
+                found.players = info.players;
+                found.max = info.max;
+                found.phase = info.phase;
+                found.name = info.name;
+            }
+        }
+        if (browser != null) browser.refresh();
     }
 
     private void onConnectionLost(String reason) {

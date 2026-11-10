@@ -11,6 +11,8 @@ engine/src/main/java/netcore/
   net/       NetServer, NetClient, Connection, Transport, TcpTransport, UdpPeer,
              Packet, FrameCodec, NetCodec, NetConfig, NetInfo, NetStats, LanDiscovery,
              MatchMaker
+  netcode/   MsgType, Msg, Wire, Rpc, RpcRouter, Codec, Codecs, ValueCodec, ValueCodecs,
+             SyncVar, NetworkBehaviour, NetworkObject, NetworkServer, NetworkClient
   sync/      ClockSync
   predict/   Predictor, SimModel, InputCommand, Correction, PredictionConfig
   voice/     VoiceMode, VoiceConfig, VoiceEngine, VoicePacket, VoiceJitterBuffer,
@@ -196,9 +198,21 @@ maker.join("beta", "192.168.0.6", 45800);
 maker.pollAndNotify();
 ```
 
-The lobby is FIFO by join order; a poll needs two entries and notifies the listener once. `join`
+The lobby is FIFO by join order and a poll needs two entries. A poll scans the queue in join order
+and pairs the first two entries the current policy allows, notifying the listener once. `join`
 returns the player name, `leave(name)` removes a player, `waiting()` reports the queue depth and
 `clear()` drops all entries.
+
+Pairing is application policy, not engine policy. `withPairing((first, second) -> ...)` accepts any
+two names and returns `true` when they may meet; the default accepts everyone. `withTimeoutMs(ms)`
+drops entries that waited too long on the next poll (`0`, the default, keeps them forever):
+
+```java
+MatchMaker maker = new MatchMaker()
+        .withCapacity(16)
+        .withTimeoutMs(30_000)
+        .withPairing((a, b) -> sameRegion(a, b));
+```
 
 ### Packets and codecs
 
@@ -245,7 +259,101 @@ are public for tools and tests.
 games to a listener. A `Found` entry exposes `name`, `host`, `port`, `players`, `max`, `seenAt` and
 `address()`.
 
-## 3. Prediction and reconciliation
+## 3. Declared messages and replication
+
+The engine has no protocol table. Every message is declared by the application before it is used on
+the wire, so adding a message never requires an engine change.
+
+### Message types
+
+`MsgType.declare(name)` registers a name and returns a shared instance. Declarations are idempotent:
+the client and server can both declare the same set in static initialisers. `MsgType.find(name)`
+looks an existing declaration up and `hash()` returns a stable 32-bit FNV-1a id.
+
+`Msg` is one message. `Msg.of(MsgType)` or `Msg.of(Rpc)` creates it; `Msg.parse(line)` accepts only
+declared types and returns `null` for anything else.
+
+```java
+Msg m = Msg.of(declared).put("tick", 42).putStr("label", "hello");
+String line = m.encode();
+Msg back = Msg.parse(line);
+```
+
+Fields: `put`, `putStr`, `raw`, `str`, `num`, `numL`, `numD`, `bool`, `has`, `rawFields`, `copy`,
+`encode`. `Msg.enc` / `Msg.dec` are the Base64 URL-safe string helpers.
+
+`Wire` frames a list of messages into one transport payload. Byte `0` marks a text frame, byte `1` a
+voice frame; text frames end with the `END` line. `Wire.decode`, `Wire.isVoice`, `Wire.voice` and
+`Wire.voiceFrom` are the helpers.
+
+### RPCs
+
+`Rpc<T>` ties a name and a codec to an allowed direction:
+
+```java
+Rpc<Msg> HELLO = Rpc.server("game/hello", Codecs.MSG);       // client -> server
+Rpc<Msg> SNAP = Rpc.observers("game/snapshot", Codecs.MSG);  // server -> observers
+Rpc<Msg> WELCOME = Rpc.target("game/welcome", Codecs.MSG);   // server -> one connection
+```
+
+`Codecs.MSG` copies every field; use `Codecs.NONE` for a parameterless RPC. `newMsg()`, `write(T)`,
+`write(Msg, T)` and `read(Msg)` apply the codec.
+
+`RpcRouter` dispatches by declaration and enforces the direction. A server-side router may register
+only `SERVER` RPCs; a client-side router only `OBSERVERS` and `TARGET`:
+
+```java
+RpcRouter router = new RpcRouter(true);
+router.on(HELLO, (from, message) -> { /* ... */ });
+boolean handled = router.dispatch(from, message);
+```
+
+### SyncVars and objects
+
+`NetworkBehaviour` declares replicated fields. The field path is `behaviour.field`, which is the key
+on the wire:
+
+```java
+final class RoomState extends NetworkBehaviour {
+    final SyncVar<Integer> phase = syncVar("phase", ValueCodecs.INT, 0);
+    final SyncVar<String> fen = syncVar("fen", ValueCodecs.STRING, "");
+
+    RoomState() {
+        super("room");
+    }
+}
+```
+
+`SyncVar` API: `get`, `set` (marks dirty only on change), `markDirty`, `isDirty`, `onChange`, `path`.
+`ValueCodecs` ships `STRING`, `INT`, `LONG`, `BOOL`, `FLOAT` and `DOUBLE`.
+
+`NetworkObject(id)` owns behaviours and observers. `spawn(owner)` runs `onStartServer`; observers are
+the connections that receive its sync vars and observer RPCs. `drainSync()` produces one `nc:sync`
+message containing the object id (`o`) and every dirty field, or `null` when nothing changed.
+`applySync(Msg)` is the receiving side; `NetworkClient.apply(Msg)` forwards sync messages to its local
+object.
+
+`NetworkServer` ties objects to a transport:
+
+```java
+NetworkServer netcode = new NetworkServer((connection, payload, reliable) ->
+        connection.send(payload, reliable));
+
+NetworkObject object = new NetworkObject(1);
+object.addBehaviour(new RoomState());
+netcode.spawn(object, owner);
+
+netcode.addObserver(object, connection);
+netcode.replicate();                       // per-tick delta fan-out
+netcode.sendFull(connection, object);      // full state for a late joiner
+netcode.sendObservers(object, message);    // observer RPC
+netcode.sendTarget(object, connection, message);
+```
+
+Only observers of an object receive its state, so one process can host many independent rooms.
+`NetworkClient` mirrors the behaviour shape on the client; field paths must match, the classes do not.
+
+## 4. Prediction and reconciliation
 
 The game describes its state through `SimModel`:
 
@@ -299,7 +407,7 @@ Reconciliation order:
 4. If `error` exceeds `snapThreshold`, it snaps to the server state and increments `snapCount()`;
    otherwise it counts a smooth correction.
 
-## 4. Voice
+## 5. Voice
 
 Voice is part of the engine, not the game. `VoiceEngine` captures a microphone, sends 20 ms PCM
 frames through the application's transport callback, receives remote frames, reorders them in an
@@ -395,7 +503,7 @@ Server to clients: `[VOICE][pidHi][pidLo][seqHi][seqLo][pcm...]`.
 The server validates every frame with `VoiceGuard` before forwarding it. Voice frames are sent
 through the voice token bucket and are never retransmitted.
 
-## 5. Subtick and timestamps
+## 6. Subtick and timestamps
 
 `TickConfig.subtick(rate, steps)` advertises `steps` input slots per tick. The engine itself only
 carries the fraction; the game decides what it means. In snake:
@@ -416,7 +524,7 @@ carries the fraction; the game decides what it means. In snake:
 `serverClock.timeOfTickNanos(tick, sub, clock)` returns the server-time instant the input should
 execute.
 
-## 6. Tests and tools
+## 7. Tests and tools
 
 ```bat
 build.bat
@@ -426,5 +534,6 @@ java -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.SubtickProbe 64 8
 
 `SelfTest` covers ticks, the tick clock, prediction and replay, compression, quality scoring,
 subtick ordering and counters, voice jitter/guard, continuous rendering, tuning factories, UDP and
-TCP transport, flood protection, auto-reconnect, UDP same-address reconnect, LAN discovery, and a
-full networked round.
+TCP transport, flood protection, auto-reconnect, UDP same-address reconnect, LAN discovery, declared
+messages and RPC direction, sync-var replication, hub multi-lobby isolation, chess rules and search,
+and several full networked rounds including bots and reconnects.

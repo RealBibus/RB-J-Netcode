@@ -3,9 +3,10 @@ package snakenet.client;
 import netcore.net.NetClient;
 import netcore.sync.ClockSync;
 import netcore.voice.VoicePacket;
-import snakenet.net.Msg;
-import snakenet.net.Protocol;
-import snakenet.net.Wire;
+import netcore.netcode.Msg;
+import netcore.netcode.NetworkClient;
+import snakenet.net.Net;
+import netcore.netcode.Wire;
 
 import javax.swing.SwingUtilities;
 import java.io.IOException;
@@ -28,6 +29,7 @@ public final class GameClient implements NetClient.Listener {
     }
 
     private final Listener listener;
+    private final NetworkClient netcode = new NetworkClient();
     private NetClient net;
 
     private GameClient(Listener listener) {
@@ -62,13 +64,18 @@ public final class GameClient implements NetClient.Listener {
             return;
         }
         List<Msg> frame = Wire.decode(payload);
+        for (Msg m : frame) netcode.apply(m);
         SwingUtilities.invokeLater(() -> listener.onFrame(frame));
         for (Msg m : frame) {
-            if (m.is(Protocol.KICK)) {
+            if (m.is(Net.KICK)) {
                 close();
                 break;
             }
         }
+    }
+
+    public NetworkClient netcode() {
+        return netcode;
     }
 
     public void sendVoice(byte[] frame) {

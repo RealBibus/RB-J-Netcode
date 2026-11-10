@@ -5,12 +5,17 @@ import netcore.voice.VoiceGuard;
 import netcore.voice.VoicePacket;
 import snakenet.game.BotBrain;
 import snakenet.game.Cell;
+import snakenet.game.Chess;
 import snakenet.game.Food;
 import snakenet.game.GameConfig;
 import snakenet.game.SnakeState;
-import snakenet.net.Msg;
-import snakenet.net.Protocol;
-import snakenet.net.Wire;
+import netcore.netcode.Msg;
+import netcore.netcode.NetworkBehaviour;
+import netcore.netcode.NetworkObject;
+import netcore.netcode.SyncVar;
+import netcore.netcode.ValueCodecs;
+import netcore.netcode.Wire;
+import snakenet.net.Net;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -58,8 +63,10 @@ public final class Room {
         public final boolean bot;
         public volatile boolean ready;
         public volatile netcore.net.Connection connection;
+        GameServer.Session session;
         SnakeState snake;
         int place;
+        int chessColor;
 
         final List<Input> inputs = new ArrayList<>();
         int ackSeq;
@@ -89,13 +96,34 @@ public final class Room {
     private static final int SPAWN_LEN = 4;
     private static final long RECONNECT_GRACE_MS = 30_000L;
 
+    /** Replicated lobby/game state. This is the FishNet-style sync-var surface. */
+    public static final class RoomSync extends NetworkBehaviour {
+        public final SyncVar<Integer> phase = syncVar("phase", ValueCodecs.INT, 0);
+        public final SyncVar<String> fen = syncVar("fen", ValueCodecs.STRING, "");
+        public final SyncVar<Integer> turn = syncVar("turn", ValueCodecs.INT, 0);
+        public final SyncVar<Integer> winner = syncVar("winner", ValueCodecs.INT, -1);
+        public final SyncVar<String> reason = syncVar("reason", ValueCodecs.STRING, "");
+        public final SyncVar<Integer> players = syncVar("players", ValueCodecs.INT, 0);
+        public final SyncVar<Integer> host = syncVar("host", ValueCodecs.INT, -1);
+
+        public RoomSync() {
+            super("room");
+        }
+    }
+
     private final GameServer server;
     private final GameConfig cfg;
     private final Random rnd = new Random();
+    private final int id;
+    private final String name;
+    private final int kind;
+    private final RoomSync sync = new RoomSync();
+    private final NetworkObject netObject;
 
     private final List<Player> players = new ArrayList<>();
     private final Map<Integer, Player> byId = new LinkedHashMap<>();
     private final Map<String, Player> byToken = new HashMap<>();
+    private final Map<netcore.net.Connection, Player> byConnection = new HashMap<>();
     private final List<Food> foods = new ArrayList<>();
     private final List<Msg> events = new ArrayList<>();
 
@@ -114,6 +142,10 @@ public final class Room {
     private List<Msg> lastOver = List.of();
     private int snapshotEvery = 1;
 
+    private Chess chess = new Chess();
+    private int chessTurn = Chess.WHITE;
+    private long nextBotMoveAt;
+
     private int subIn;
     private int subApplied;
     private int subMerged;
@@ -126,13 +158,59 @@ public final class Room {
     private long voiceAccepted;
     private long voiceRejected;
 
-    Room(GameServer server, GameConfig cfg) {
+    Room(GameServer server, int id, String name, int kind, GameConfig cfg) {
         this.server = server;
+        this.id = id;
+        this.name = name;
+        this.kind = kind;
         this.cfg = cfg.copy();
+        this.cfg.chess = kind == Net.KIND_CHESS;
+        this.netObject = new NetworkObject(10_000 + id);
+        this.netObject.addBehaviour(sync);
+        server.netcode().spawn(netObject, null);
+    }
+
+    public int id() {
+        return id;
+    }
+
+    public String name() {
+        return name;
+    }
+
+    public int kind() {
+        return kind;
+    }
+
+    public boolean isChess() {
+        return kind == Net.KIND_CHESS;
+    }
+
+    public boolean closed() {
+        return closed;
+    }
+
+    public boolean canJoin() {
+        return !closed && phase == Phase.LOBBY && players.size() < cfg.maxPlayers;
     }
 
     public GameConfig config() {
         return cfg;
+    }
+
+    public RoomSync sync() {
+        return sync;
+    }
+
+    Msg describe() {
+        Msg m = Net.ROOM.newMsg()
+                .put("id", id)
+                .put("kind", kind)
+                .put("players", players.size())
+                .put("max", cfg.maxPlayers)
+                .put("phase", phase.ordinal());
+        m.putStr("name", name);
+        return m;
     }
 
     public synchronized int playerCount() {
@@ -154,6 +232,8 @@ public final class Room {
     }
 
     void start() {
+        System.out.println("[room] '" + server.name() + "' tick runner started, phase=" + phase
+                + " tickRate=" + cfg.tickRate + " subtick=" + cfg.subtick);
         runner = new netcore.time.TickRunner(cfg.tickConfig(), this::onTick);
         snapshotEvery = Math.max(1, Math.round(cfg.tickRate / 30f));
         runner.start();
@@ -175,9 +255,22 @@ public final class Room {
                 expireReconnects();
                 if (phase == Phase.COUNT) countdownTick();
                 else if (phase == Phase.RUNNING) gameTick();
+                server.netcode().replicate();
             } catch (Throwable t) {
                 System.err.println("[room] tick error: " + t);
             }
+        }
+    }
+
+    private void syncState() {
+        sync.phase.set(phase.ordinal());
+        sync.fen.set(isChess() ? chess.toFen() : "");
+        sync.turn.set(chessTurn);
+        sync.players.set(players.size());
+        sync.host.set(hostId());
+        if (phase != Phase.OVER) {
+            sync.winner.set(-1);
+            sync.reason.set("");
         }
     }
 
@@ -199,13 +292,42 @@ public final class Room {
     
     
 
-    synchronized void onConnect(netcore.net.Connection connection) {
-        
+    synchronized void addSession(GameServer.Session session, boolean creator) {
+        if (closed || session.connection == null) return;
+        Player attached = byId.get(session.id);
+        if (attached != null) {
+            attached.session = session;
+            resume(session);
+            return;
+        }
+        if (players.size() >= cfg.maxPlayers) {
+            server.send(session.connection, Net.ERR.newMsg().putStr("msg", "Lobby is full"));
+            return;
+        }
+        Player p = new Player(session.id, uniqueName(session.name), session.color, false, session.connection);
+        p.session = session;
+        p.token = session.token;
+        p.voiceGuard = new VoiceGuard(cfg.voiceConfig());
+        players.add(p);
+        byId.put(p.id, p);
+        if (!p.token.isEmpty()) byToken.put(p.token, p);
+        if (p.connection != null) {
+            byConnection.put(p.connection, p);
+            p.connection.attachment = p;
+            netObject.addObserver(p.connection);
+        }
+        resendWelcome(p.connection, p);
+        broadcastLobby();
+        system(p.name + (creator ? " created the lobby" : " joined"));
     }
 
-    synchronized void onDisconnect(netcore.net.Connection connection) {
-        Player p = connection.attachment instanceof Player ? (Player) connection.attachment : null;
-        if (p == null || p.connection != connection) return;
+    synchronized void onDisconnect(GameServer.Session session, netcore.net.Connection connection) {
+        Player p = byId.get(session.id);
+        if (p == null || (connection != null && p.connection != connection)) return;
+        if (connection != null) {
+            byConnection.remove(connection);
+            netObject.removeObserver(connection);
+        }
         p.connection = null;
         if (phase == Phase.LOBBY) {
             leave(p.id);
@@ -217,93 +339,70 @@ public final class Room {
         broadcastLobby();
     }
 
-    synchronized void onJoin(netcore.net.Connection connection, String rawName, int color, String token) {
-        if (closed) return;
-        Player attached = connection.attachment instanceof Player ? (Player) connection.attachment : null;
-        if (attached != null) {
-            
-            
-            resendWelcome(connection, attached);
-            return;
-        }
-        if (token != null && !token.isEmpty()) {
-            Player old = byToken.get(token);
-            if (old != null) {
-                if (old.connection == connection) {
-                    connection.attachment = old;
-                    resendWelcome(connection, old);
-                } else {
-                    resume(old, connection);
-                }
-                return;
-            }
-        }
-        if (players.size() >= cfg.maxPlayers) {
-            server.send(connection, Wire.encode(List.of(
-                    Msg.of(Protocol.ERR).putStr("msg", "Lobby is full"))));
-            connection.close();
-            return;
-        }
-        String name = uniqueName(GameConfig.sanitizeName(rawName));
-        Player p = new Player(nextId++, name, Math.floorMod(color, 10), false, connection);
-        p.voiceGuard = new VoiceGuard(cfg.voiceConfig());
-        players.add(p);
-        byId.put(p.id, p);
-        p.token = token == null ? "" : token;
-        if (!p.token.isEmpty()) byToken.put(p.token, p);
-        connection.attachment = p;
-
-        resendWelcome(connection, p);
-        broadcastLobby();
-        system(name + " joined");
-    }
-
     
 
 
 
 
-    private void resume(Player p, netcore.net.Connection connection) {
+    synchronized void resume(GameServer.Session session) {
+        if (closed) return;
+        Player p = byId.get(session.id);
+        if (p == null) {
+            addSession(session, false);
+            return;
+        }
         netcore.net.Connection prev = p.connection;
-        if (prev != null && prev.attachment == p) prev.attachment = null;
-        p.connection = connection;
+        if (prev != null && prev != session.connection) {
+            if (prev.attachment == p) prev.attachment = null;
+            byConnection.remove(prev);
+            netObject.removeObserver(prev);
+        }
+        p.session = session;
+        p.connection = session.connection;
         p.reconnecting = false;
         p.reconnectDeadline = 0;
-        connection.attachment = p;
         p.inputs.clear();
         p.ackSeq = 0;
         p.lastInputSeq = 0;
         p.voiceGuard = null;
-
-        if (prev != null && prev != connection) {
-            server.send(prev, Wire.encode(List.of(
-                    Msg.of(Protocol.KICK).putStr("msg", "Session resumed in another window"))));
-            prev.close();
+        if (session.connection != null) {
+            session.connection.attachment = p;
+            byConnection.put(session.connection, p);
+            netObject.addObserver(session.connection);
         }
-        resendWelcome(connection, p);
+        resendWelcome(session.connection, p);
         system(p.name + " reconnected");
         broadcastLobby();
     }
 
-    
     private void resendWelcome(netcore.net.Connection connection, Player p) {
-        List<Msg> hello = new ArrayList<>();
-        hello.add(Msg.of(Protocol.WELCOME)
+        if (connection == null) return;
+        Msg welcome = Net.WELCOME.newMsg()
                 .put("pid", p.id)
                 .put("host", isHost(p) ? 1 : 0)
                 .put("phase", phase.ordinal())
-                .put("rate", cfg.tickRate));
-        cfg.write(hello.get(0));
-        server.send(connection, Wire.encode(hello));
+                .put("rate", cfg.tickRate)
+                .put("room", id)
+                .put("kind", kind)
+                .put("cc", p.chessColor);
+        cfg.write(welcome);
+        welcome.putStr("roomName", name);
+        server.send(connection, welcome);
 
         if (phase == Phase.COUNT || phase == Phase.RUNNING) {
             server.send(connection, Wire.encode(startFrame()));
-            if (phase == Phase.RUNNING) {
+            if (phase == Phase.RUNNING && !isChess()) {
                 server.send(connection, Wire.encode(snapshotFrame()));
             }
         } else if (phase == Phase.OVER && !lastOver.isEmpty()) {
             server.send(connection, Wire.encode(lastOver));
         }
+        server.netcode().sendFull(connection, netObject);
+    }
+
+    synchronized void removeSession(GameServer.Session session) {
+        Player p = byId.get(session.id);
+        if (p != null) leave(p.id);
     }
 
     synchronized void leave(int playerId) {
@@ -311,12 +410,17 @@ public final class Room {
         if (p == null) return;
         players.remove(p);
         if (p.token != null && !p.token.isEmpty()) byToken.remove(p.token, p);
-        if (p.connection != null) p.connection.attachment = null;
+        if (p.connection != null) {
+            byConnection.remove(p.connection);
+            netObject.removeObserver(p.connection);
+            p.connection.attachment = null;
+        }
+        if (p.session != null) p.session.room = null;
         boolean wasAlive = p.snake != null && p.snake.alive;
         if (wasAlive) {
             Cell h = p.snake.head();
             if (h != null) {
-                events.add(Msg.of(Protocol.EVENT).put("k", Protocol.EV_DIE)
+                events.add(Msg.of(Net.EVENT).put("k", Net.EV_DIE)
                         .put("p", p.id).put("x", h.x).put("y", h.y));
             }
             p.snake.alive = false;
@@ -325,11 +429,13 @@ public final class Room {
             if (phase == Phase.LOBBY) system(p.name + " left");
             else system(p.name + " disconnected");
         }
+        syncState();
         broadcastLobby();
         if (phase == Phase.RUNNING) {
             checkEnd();
-            if (phase == Phase.RUNNING) broadcastSnapshot();
+            if (phase == Phase.RUNNING && !isChess()) broadcastSnapshot();
         }
+        if (hostId() < 0) server.onRoomEmpty(this);
     }
 
     private String uniqueName(String base) {
@@ -367,59 +473,38 @@ public final class Room {
     
     
 
-    synchronized void onMessage(netcore.net.Connection connection, List<Msg> frame) {
-        boolean restart = handleMessages(connection, frame);
-        
-        
-        if (restart) {
-            restartRunner();
-        }
-    }
-
-    
-    private boolean handleMessages(netcore.net.Connection connection, List<Msg> frame) {
-        boolean restart = false;
-        for (Msg m : frame) {
-            Player p = connection.attachment instanceof Player ? (Player) connection.attachment : null;
-            if (m.is(Protocol.HELLO)) {
-                if (p == null) onJoin(connection, m.str("name"), m.num("color", 0), m.str("token"));
-                else resendWelcome(connection, p);
-                continue;
+    synchronized void onMessage(netcore.net.Connection connection, Msg m) {
+        Player p = byConnection.get(connection);
+        if (p == null || closed) return;
+        if (m.is(Net.IN)) {
+            if (p.snake != null && p.snake.alive) readInput(p, m);
+        } else if (m.is(Net.READY)) {
+            p.ready = m.bool("v");
+            broadcastLobby();
+        } else if (m.is(Net.CHAT)) {
+            chat(p, m.str("text"));
+        } else if (m.is(Net.SET)) {
+            if (isHost(p) && applySetting(m.raw("k"), m.num("v", 0))) restartRunner();
+        } else if (m.is(Net.BOT)) {
+            if (isHost(p)) botCommand(m.raw("op"));
+        } else if (m.is(Net.CHESS_MOVE)) {
+            if (phase != Phase.RUNNING || !isChess() || p.bot || p.chessColor != chessTurn) return;
+            Chess.Move move = null;
+            for (Chess.Move candidate : chess.legalMoves()) {
+                if (candidate.from == m.num("f", -1) && candidate.to == m.num("t", -1)
+                        && candidate.promotion == m.num("pr", 0)) {
+                    move = candidate;
+                    break;
+                }
             }
-            if (p == null) continue;
-            switch (m.type()) {
-                case Protocol.IN:
-                    if (p.snake != null && p.snake.alive) {
-                        readInput(p, m);
-                    }
-                    break;
-                case Protocol.READY:
-                    p.ready = m.bool("v");
-                    broadcastLobby();
-                    break;
-                case Protocol.CHAT:
-                    chat(p, m.str("text"));
-                    break;
-                case Protocol.SET:
-                    if (isHost(p)) restart |= applySetting(m.raw("k"), m.num("v", 0));
-                    break;
-                case Protocol.BOT:
-                    if (isHost(p)) botCommand(m.raw("op"));
-                    break;
-                case Protocol.KICK_PLAYER:
-                    if (isHost(p)) kick(p, m.num("p", -1));
-                    break;
-                case Protocol.START:
-                    if (isHost(p)) startCountdown();
-                    break;
-                case Protocol.AGAIN:
-                    if (isHost(p) && phase == Phase.OVER) backToLobby();
-                    break;
-                default:
-                    break;
-            }
+            if (move != null) applyChessMove(p, move);
+        } else if (m.is(Net.KICK_PLAYER)) {
+            if (isHost(p)) kick(p, m.num("p", -1));
+        } else if (m.is(Net.START)) {
+            if (isHost(p)) startCountdown();
+        } else if (m.is(Net.AGAIN)) {
+            if (isHost(p) && phase == Phase.OVER) backToLobby();
         }
-        return restart;
     }
 
     
@@ -428,7 +513,7 @@ public final class Room {
         if (target == null || target.id == host.id || target.bot) return;
         if (target.connection != null) {
             server.send(target.connection, Wire.encode(List.of(
-                    Msg.of(Protocol.KICK).putStr("msg", "The host kicked you from the game"))));
+                    Msg.of(Net.KICK).putStr("msg", "The host kicked you from the game"))));
             target.connection.close();
         }
         String name = target.name;
@@ -469,21 +554,21 @@ public final class Room {
         out[1] = (byte) (p.id >> 8);
         out[2] = (byte) p.id;
         System.arraycopy(payload, 1, out, 3, payload.length - 1);
-        server.broadcastVoice(out, connection);
+        server.broadcastVoice(members(), out, connection);
     }
 
     private void chat(Player from, String text) {
         String clean = text == null ? "" : text.replace('\n', ' ').replace('\r', ' ').trim();
         if (clean.isEmpty()) return;
         if (clean.length() > 200) clean = clean.substring(0, 200);
-        Msg m = Msg.of(Protocol.CHAT).putStr("from", from.name).putStr("text", clean).put("kind", 0)
+        Msg m = Net.CHAT_OUT.newMsg().putStr("from", from.name).putStr("text", clean).put("kind", 0)
                 .put("p", from.id).put("c", from.color);
-        server.broadcast(Wire.encode(List.of(m)));
+        broadcastRoom(Wire.encode(m));
     }
 
     private void system(String text) {
-        server.broadcast(Wire.encode(List.of(
-                Msg.of(Protocol.CHAT).putStr("from", "").putStr("text", text).put("kind", 1))));
+        broadcastRoom(Wire.encode(
+                Net.CHAT_OUT.newMsg().putStr("from", "").putStr("text", text).put("kind", 1)));
     }
 
     private boolean applySetting(String key, int value) {
@@ -508,6 +593,12 @@ public final class Room {
                 break;
             case "walls":
                 cfg.walls = value != 0;
+                break;
+            case "chessSide":
+                cfg.chessSide = Math.max(0, Math.min(2, value));
+                break;
+            case "chessBot":
+                cfg.chessBotDepth = Math.max(1, Math.min(4, value));
                 break;
             default:
                 return false;
@@ -562,18 +653,20 @@ public final class Room {
     private void startCountdown() {
         if (phase != Phase.LOBBY && phase != Phase.OVER) return;
         if (players.isEmpty()) return;
+        if (isChess() && players.size() < 2) botCommand("add");
         resetRound();
         phase = Phase.COUNT;
+        syncState();
         countTicksLeft = 3 * cfg.tickRate;
         lastCountShown = 4;
-        server.broadcast(Wire.encode(startFrame()));
-        server.broadcast(Wire.encode(List.of(Msg.of(Protocol.COUNT).put("n", 3))));
+        broadcastRoom(Wire.encode(startFrame()));
+        broadcastRoom(Wire.encode(Net.COUNT.newMsg().put("n", 3)));
         lastCountShown = 3;
         broadcastLobby();
     }
 
     private List<Msg> startFrame() {
-        Msg m = Msg.of(Protocol.START).put("phase", Protocol.PHASE_COUNT).put("n", 3);
+        Msg m = Net.STARTED.newMsg().put("phase", Net.PHASE_COUNT).put("n", 3);
         cfg.write(m);
         return new ArrayList<>(List.of(m));
     }
@@ -583,7 +676,7 @@ public final class Room {
         int seconds = (int) Math.ceil(countTicksLeft / (double) cfg.tickRate);
         if (seconds > 0 && seconds < lastCountShown) {
             lastCountShown = seconds;
-            server.broadcast(Wire.encode(List.of(Msg.of(Protocol.COUNT).put("n", seconds))));
+            broadcastRoom(Wire.encode(List.of(Msg.of(Net.COUNT).put("n", seconds))));
         }
         if (countTicksLeft <= 0) beginRun();
     }
@@ -594,6 +687,8 @@ public final class Room {
         lastOver = List.of();
         resetSubtickStats();
         int index = 0;
+        int firstColor = cfg.chessSide == 0 ? Chess.WHITE
+                : cfg.chessSide == 1 ? Chess.BLACK : rnd.nextBoolean() ? Chess.WHITE : Chess.BLACK;
         for (Player p : players) {
             p.ready = false;
             p.inputs.clear();
@@ -601,8 +696,21 @@ public final class Room {
             p.lastInputSeq = 0;
             p.inputDropped = 0;
             p.voiceGuard = null;
-            p.snake = new SnakeState(p.id, p.name, p.color, p.bot);
-            placeSnake(p.snake, index++, Math.max(1, players.size()));
+            if (isChess()) {
+                p.snake = null;
+                p.chessColor = index == 0 ? firstColor : (firstColor == Chess.WHITE ? Chess.BLACK : Chess.WHITE);
+            } else {
+                p.snake = new SnakeState(p.id, p.name, p.color, p.bot);
+                placeSnake(p.snake, index, Math.max(1, players.size()));
+            }
+            index++;
+        }
+        if (isChess()) {
+            chess = new Chess();
+            chessTurn = Chess.WHITE;
+            syncState();
+            for (Player p : players) resendWelcome(p.connection, p);
+            return;
         }
         int target = foodTarget();
         for (int i = 0; i < target; i++) spawnFood();
@@ -640,7 +748,73 @@ public final class Room {
     private void beginRun() {
         phase = Phase.RUNNING;
         countTicksLeft = 0;
+        syncState();
+        if (isChess()) {
+            chessTick();
+            return;
+        }
         broadcastSnapshot();
+    }
+
+    private void chessTick() {
+        if (phase != Phase.RUNNING || !isChess()) return;
+        Player mover = playerForColor(chessTurn);
+        if (mover == null || !mover.bot) return;
+        long now = System.nanoTime();
+        if (now < nextBotMoveAt) return;
+        nextBotMoveAt = now + 450_000_000L;
+        Chess.Move move = chess.bestMove(cfg.chessBotDepth);
+        if (move == null) {
+            finishChess();
+            return;
+        }
+        applyChessMove(mover, move);
+    }
+
+    private Player playerForColor(int color) {
+        for (Player p : players) {
+            if (p.chessColor == color) return p;
+        }
+        return null;
+    }
+
+    private void applyChessMove(Player p, Chess.Move move) {
+        Chess.Move legalMove = null;
+        for (Chess.Move candidate : chess.legalMoves()) {
+            if (candidate.from == move.from && candidate.to == move.to && candidate.promotion == move.promotion) {
+                legalMove = candidate;
+                break;
+            }
+        }
+        if (legalMove == null) {
+            p.inputDropped++;
+            return;
+        }
+        chess = chess.apply(legalMove);
+        Msg moveMsg = Net.CHESS_MOVE_OUT.newMsg()
+                .put("p", p.id).put("f", legalMove.from).put("t", legalMove.to).put("pr", legalMove.promotion)
+                .put("fen", chess.toFen());
+        broadcastRoom(Wire.encode(moveMsg));
+        chessTurn = chess.turn();
+        syncState();
+        if (chess.isCheckmate() || chess.isStalemate() || chess.isDraw()) {
+            finishChess();
+        }
+    }
+
+    private void finishChess() {
+        if (phase != Phase.RUNNING) return;
+        int winnerColor = chessTurn == Chess.WHITE ? Chess.BLACK : Chess.WHITE;
+        int winnerPlayerId = -1;
+        for (Player p : players) if (p.chessColor == winnerColor) winnerPlayerId = p.id;
+        if (chess.isStalemate() || chess.isDraw()) winnerPlayerId = -1;
+        phase = Phase.OVER;
+        syncState();
+        String reason = chess.isCheckmate() ? "checkmate" : chess.isDraw() ? "draw" : "stalemate";
+        sync.winner.set(winnerPlayerId);
+        sync.reason.set(reason);
+        broadcastRoom(Wire.encode(Net.CHESS_END.newMsg().put("w", winnerPlayerId).put("r", reason)));
+        system("Chess finished: " + reason);
     }
 
     private void backToLobby() {
@@ -652,6 +826,7 @@ public final class Room {
             p.ready = false;
             p.inputs.clear();
         }
+        syncState();
         broadcastLobby();
         system("Back to the lobby");
     }
@@ -659,15 +834,16 @@ public final class Room {
     private void endGame() {
         phase = Phase.OVER;
         foods.clear();
+        syncState();
         List<Player> ranked = new ArrayList<>();
         for (Player p : players) if (p.snake != null) ranked.add(p);
         ranked.sort(Comparator.comparingInt((Player p) -> p.snake.score).reversed());
 
         List<Msg> frame = new ArrayList<>();
-        frame.add(Msg.of(Protocol.OVER).put("n", ranked.size()));
+        frame.add(Msg.of(Net.OVER).put("n", ranked.size()));
         int place = 1;
         for (Player p : ranked) {
-            Msg r = Msg.of(Protocol.RESULT)
+            Msg r = Msg.of(Net.RESULT)
                     .put("p", p.id)
                     .put("sc", p.snake.score)
                     .put("place", place++)
@@ -677,7 +853,7 @@ public final class Room {
             frame.add(r);
         }
         lastOver = frame;
-        server.broadcast(Wire.encode(frame));
+        broadcastRoom(Wire.encode(frame));
     }
 
     private int foodTarget() {
@@ -824,6 +1000,11 @@ public final class Room {
     private void gameTick() {
         events.clear();
 
+        if (cfg.chess) {
+            chessTick();
+            return;
+        }
+
         
         for (Player p : players) {
             SnakeState s = p.snake;
@@ -857,7 +1038,7 @@ public final class Room {
                 }
                 p.ackSeq = Math.max(p.ackSeq, in.seq);
                 if (acks == null) acks = new ArrayList<>(2);
-                acks.add(Msg.of(Protocol.ACK).put("n", in.seq).put("t", tick));
+                acks.add(Msg.of(Net.ACK).put("n", in.seq).put("t", tick));
                 it.remove();
             }
             if (cfg.subtick && eligible > 0) {
@@ -959,7 +1140,7 @@ public final class Room {
                 SnakeState s = e.getKey().snake;
                 s.score += 10;
                 s.grow += 2;
-                events.add(Msg.of(Protocol.EVENT).put("k", Protocol.EV_EAT)
+                events.add(Msg.of(Net.EVENT).put("k", Net.EV_EAT)
                         .put("p", e.getKey().id).put("x", c.x).put("y", c.y));
                 foods.removeIf(f -> f.x == c.x && f.y == c.y);
             }
@@ -1007,7 +1188,7 @@ public final class Room {
         s.alive = false;
         Cell h = s.head();
         if (h != null) {
-            events.add(Msg.of(Protocol.EVENT).put("k", Protocol.EV_DIE)
+            events.add(Msg.of(Net.EVENT).put("k", Net.EV_DIE)
                     .put("p", p.id).put("x", h.x).put("y", h.y));
         }
         int dropped = 0;
@@ -1041,7 +1222,7 @@ public final class Room {
         List<Msg> frame = new ArrayList<>();
         long droppedInputs = 0;
         for (Player p : players) droppedInputs += p.inputDropped;
-        frame.add(Msg.of(Protocol.SNAP)
+        frame.add(Msg.of(Net.SNAP)
                 .put("t", tick)
                 .put("st", System.nanoTime())
                 .put("rate", cfg.tickRate)
@@ -1059,13 +1240,13 @@ public final class Room {
                 .put("vok", voiceAccepted)
                 .put("vdr", voiceRejected));
         for (Food f : foods) {
-            frame.add(Msg.of(Protocol.FOOD).put("x", f.x).put("y", f.y).put("k", f.kind));
+            frame.add(Msg.of(Net.FOOD).put("x", f.x).put("y", f.y).put("k", f.kind));
         }
         frame.addAll(events);
         for (Player p : players) {
             SnakeState s = p.snake;
             if (s == null) continue;
-            Msg m = Msg.of(Protocol.SNAKE)
+            Msg m = Msg.of(Net.SNAKE)
                     .put("p", p.id)
                     .put("a", s.alive ? 1 : 0)
                     .put("sc", s.score)
@@ -1087,19 +1268,37 @@ public final class Room {
     }
 
     private void broadcastSnapshot() {
-        server.broadcastUnreliable(Wire.encode(snapshotFrame()));
+        broadcastRoomUnreliable(Wire.encode(snapshotFrame()));
+    }
+
+    /** Connections that belong to this room, never the other lobbies on the hub. */
+    private List<netcore.net.Connection> members() {
+        List<netcore.net.Connection> list = new ArrayList<>();
+        for (Player p : players) {
+            netcore.net.Connection c = p.connection;
+            if (c != null && c.isOpen()) list.add(c);
+        }
+        return list;
+    }
+
+    private void broadcastRoom(byte[] payload) {
+        server.sendTo(members(), payload, true);
+    }
+
+    private void broadcastRoomUnreliable(byte[] payload) {
+        server.sendTo(members(), payload, false);
     }
 
     void broadcastLobby() {
         List<Msg> frame = new ArrayList<>();
-        Msg head = Msg.of(Protocol.LOBBY)
+        Msg head = Msg.of(Net.LOBBY)
                 .put("phase", phase.ordinal())
                 .put("host", hostId())
                 .put("tick", tick);
         cfg.write(head);
         frame.add(head);
         for (Player p : players) {
-            Msg m = Msg.of(Protocol.PLAYER)
+            Msg m = Msg.of(Net.PLAYER)
                     .put("id", p.id)
                     .put("c", p.color)
                     .put("ready", p.ready ? 1 : 0)
@@ -1111,6 +1310,6 @@ public final class Room {
             m.putStr("name", p.name);
             frame.add(m);
         }
-        server.broadcast(Wire.encode(frame));
+        broadcastRoom(Wire.encode(frame));
     }
 }

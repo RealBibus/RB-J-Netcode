@@ -1,8 +1,8 @@
 package snakenet.ui;
 
 import snakenet.game.GameConfig;
-import snakenet.net.Msg;
-import snakenet.net.Protocol;
+import netcore.netcode.Msg;
+import snakenet.net.Net;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -49,6 +49,8 @@ public final class LobbyScreen extends Screen {
     private final NeonButton bTick;
     private final NeonButton bSub;
     private final NeonButton bWalls;
+    private final NeonButton bSide;
+    private final NeonButton bBotDepth;
 
     public LobbyScreen(App app) {
         super(app);
@@ -62,13 +64,15 @@ public final class LobbyScreen extends Screen {
         bTick = add(new NeonButton("Tick", NeonButton.Style.CHIP, 452, 664, 130, 40, this::cycleTick));
         bSub = add(new NeonButton("SUB", NeonButton.Style.CHIP, 590, 664, 110, 40, this::toggleSubtick));
         bWalls = add(new NeonButton("Walls", NeonButton.Style.CHIP, 708, 664, 150, 40, this::toggleWalls));
-        bBotAdd = add(new NeonButton("+ Bot", NeonButton.Style.CHIP, 866, 664, 80, 40, () -> app.send(Msg.of(Protocol.BOT).put("op", "add"))));
-        bBotDel = add(new NeonButton("− Bot", NeonButton.Style.CHIP, 954, 664, 80, 40, () -> app.send(Msg.of(Protocol.BOT).put("op", "del"))));
+        bSide = add(new NeonButton("White", NeonButton.Style.CHIP, 56, 664, 200, 40, this::cycleSide));
+        bBotDepth = add(new NeonButton("Bot · 2 ply", NeonButton.Style.CHIP, 264, 664, 200, 40, this::cycleBotDepth));
+        bBotAdd = add(new NeonButton("+ Bot", NeonButton.Style.CHIP, 866, 664, 80, 40, () -> app.send(Msg.of(Net.BOT).put("op", "add"))));
+        bBotDel = add(new NeonButton("− Bot", NeonButton.Style.CHIP, 954, 664, 80, 40, () -> app.send(Msg.of(Net.BOT).put("op", "del"))));
 
         bReady = add(new NeonButton("Ready", NeonButton.Style.PRIMARY, 960, 720, 156, 52, this::toggleReady));
-        bStart = add(new NeonButton("START GAME", NeonButton.Style.PRIMARY, 900, 720, 216, 52, () -> app.send(Msg.of(Protocol.START))));
+        bStart = add(new NeonButton("START GAME", NeonButton.Style.PRIMARY, 900, 720, 216, 52, () -> app.send(Msg.of(Net.START))));
         add(new NeonButton("→", NeonButton.Style.SECONDARY, 1166, 596, 46, 40, this::sendChat));
-        add(new NeonButton("Exit", NeonButton.Style.DANGER, 1128, 720, 96, 52, () -> app.leaveToHome()));
+        add(new NeonButton("Leave", NeonButton.Style.DANGER, 1128, 720, 96, 52, () -> app.leaveLobby()));
 
         addHotspot(900, 92, 324, 46, this::copyAddress);
 
@@ -101,36 +105,44 @@ public final class LobbyScreen extends Screen {
     private void toggleReady() {
         Roster me = me();
         boolean next = me == null || !me.ready;
-        app.send(Msg.of(Protocol.READY).put("v", next ? 1 : 0));
+        app.send(Msg.of(Net.READY).put("v", next ? 1 : 0));
     }
 
     private void cycleField() {
         int idx = cfg.sizeIndex();
-        app.send(Msg.of(Protocol.SET).put("k", "size").put("v", idx < 0 ? 1 : (idx + 1) % GameConfig.SIZE.length));
+        app.send(Msg.of(Net.SET).put("k", "size").put("v", idx < 0 ? 1 : (idx + 1) % GameConfig.SIZE.length));
     }
 
     private void cycleSpeed() {
         int idx = cfg.speedIndex();
-        app.send(Msg.of(Protocol.SET).put("k", "speed").put("v", idx < 0 ? 1 : (idx + 1) % GameConfig.SPEED_CELLS.length));
+        app.send(Msg.of(Net.SET).put("k", "speed").put("v", idx < 0 ? 1 : (idx + 1) % GameConfig.SPEED_CELLS.length));
     }
 
     private void cycleTick() {
         int idx = cfg.tickIndex();
-        app.send(Msg.of(Protocol.SET).put("k", "rate").put("v", idx < 0 ? 1 : (idx + 1) % GameConfig.TICK_RATES.length));
+        app.send(Msg.of(Net.SET).put("k", "rate").put("v", idx < 0 ? 1 : (idx + 1) % GameConfig.TICK_RATES.length));
     }
 
     private void toggleSubtick() {
-        app.send(Msg.of(Protocol.SET).put("k", "subtick").put("v", cfg.subtick ? 0 : 1));
+        app.send(Msg.of(Net.SET).put("k", "subtick").put("v", cfg.subtick ? 0 : 1));
     }
 
     private void toggleWalls() {
-        app.send(Msg.of(Protocol.SET).put("k", "walls").put("v", cfg.walls ? 0 : 1));
+        app.send(Msg.of(Net.SET).put("k", "walls").put("v", cfg.walls ? 0 : 1));
+    }
+
+    private void cycleSide() {
+        app.send(Msg.of(Net.SET).put("k", "chessSide").put("v", (cfg.chessSide + 1) % 3));
+    }
+
+    private void cycleBotDepth() {
+        app.send(Msg.of(Net.SET).put("k", "chessBot").put("v", cfg.chessBotDepth >= 4 ? 1 : cfg.chessBotDepth + 1));
     }
 
     private void sendChat() {
         String text = chatField.getText().trim();
         if (text.isEmpty()) return;
-        app.send(Msg.of(Protocol.CHAT).putStr("text", text));
+        app.send(Msg.of(Net.CHAT).putStr("text", text));
         chatField.setText("");
     }
 
@@ -149,14 +161,14 @@ public final class LobbyScreen extends Screen {
     public void onFrame(List<Msg> frame) {
         boolean lobby = false;
         for (Msg m : frame) {
-            if (m.is(Protocol.LOBBY)) {
+            if (m.is(Net.LOBBY)) {
                 readLobby(frame);
                 lobby = true;
                 break;
             }
         }
         for (Msg m : frame) {
-            if (m.is(Protocol.CHAT)) {
+            if (m.is(Net.CHAT_OUT)) {
                 ChatLine line = new ChatLine();
                 line.from = m.str("from");
                 line.text = m.str("text");
@@ -173,10 +185,10 @@ public final class LobbyScreen extends Screen {
         List<Roster> list = new ArrayList<>();
         int host = -1;
         for (Msg m : frame) {
-            if (m.is(Protocol.LOBBY)) {
+            if (m.is(Net.LOBBY)) {
                 host = m.num("host", -1);
                 cfg = GameConfig.read(m, cfg);
-            } else if (m.is(Protocol.PLAYER)) {
+            } else if (m.is(Net.PLAYER)) {
                 Roster r = new Roster();
                 r.id = m.num("id", 0);
                 r.name = m.str("name");
@@ -198,7 +210,7 @@ public final class LobbyScreen extends Screen {
     private void requestKick(int id) {
         long now = System.currentTimeMillis();
         if (pendingKick == id && now - pendingKickAt < 3000) {
-            app.send(Msg.of(Protocol.KICK_PLAYER).put("p", id));
+            app.send(Msg.of(Net.KICK_PLAYER).put("p", id));
             pendingKick = -1;
         } else {
             pendingKick = id;
@@ -209,12 +221,15 @@ public final class LobbyScreen extends Screen {
 
     private void refreshButtons() {
         boolean host = app.isHost();
+        boolean chess = app.gameKind() == Net.KIND_CHESS;
         Roster me = me();
-        bField.visible = host;
-        bSpeed.visible = host;
-        bTick.visible = host;
-        bSub.visible = host;
-        bWalls.visible = host;
+        bField.visible = host && !chess;
+        bSpeed.visible = host && !chess;
+        bTick.visible = host && !chess;
+        bSub.visible = host && !chess;
+        bWalls.visible = host && !chess;
+        bSide.visible = host && chess;
+        bBotDepth.visible = host && chess;
         bBotAdd.visible = host;
         bBotDel.visible = host;
         bStart.visible = host;
@@ -227,10 +242,14 @@ public final class LobbyScreen extends Screen {
         bSub.selected = cfg.subtick;
         bWalls.label = cfg.walls ? "Walls · solid" : "Walls · wrap";
         bWalls.selected = cfg.walls;
+        String[] sides = {"White", "Black", "Random"};
+        bSide.label = "Side · " + sides[Math.max(0, Math.min(2, cfg.chessSide))];
+        bBotDepth.label = "Bot · " + cfg.chessBotDepth + " ply";
 
         bReady.selected = me != null && me.ready;
         bReady.label = me != null && me.ready ? "Not ready" : "Ready";
         bStart.enabled = !players.isEmpty();
+        bStart.label = chess ? "START MATCH" : "START GAME";
 
         clearHotspots();
         addHotspot(900, 92, 324, 46, this::copyAddress);
@@ -251,8 +270,12 @@ public final class LobbyScreen extends Screen {
 
     @Override
     protected void paintScreen(Graphics2D g) {
-        Brush.text(g, "Lobby", 56, 132, Theme.display(40), Theme.TEXT);
-        Brush.text(g, "Invite friends with the address — or add bots and play solo", 58, 160, Theme.font(15), Theme.MUTED);
+        String title = app.roomName().isBlank() ? "Lobby" : app.roomName();
+        Brush.text(g, title, 56, 132, Theme.display(40), Theme.TEXT);
+        boolean chess = app.gameKind() == Net.KIND_CHESS;
+        Brush.text(g, chess ? "Chess match — invite a friend or play the bot"
+                        : "Invite friends with the address — or add bots and play solo",
+                58, 160, Theme.font(15), Theme.MUTED);
 
         paintAddress(g);
 

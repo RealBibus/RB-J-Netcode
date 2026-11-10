@@ -2,8 +2,8 @@ package snakenet.tools;
 
 import snakenet.Prefs;
 import snakenet.game.GameConfig;
-import snakenet.net.Msg;
-import snakenet.net.Protocol;
+import netcore.netcode.Msg;
+import snakenet.net.Net;
 import snakenet.ui.App;
 import snakenet.ui.GameScreen;
 import snakenet.ui.LobbyScreen;
@@ -71,6 +71,19 @@ public final class UiShots {
         feedOver(game);
         shoot(game, new File(dir, "6-results.png"), 20);
 
+        app.setGameKind(Net.KIND_CHESS);
+        var chessCreate = app.hostScreen();
+        chessCreate.onShow();
+        shoot(chessCreate, new File(dir, "2b-chess-create.png"), 10);
+
+        LobbyScreen chessLobby = new LobbyScreen(app);
+        feedChessLobby(chessLobby);
+        shoot(chessLobby, new File(dir, "4b-chess-lobby.png"), 30);
+
+        GameScreen chessGame = new GameScreen(app);
+        feedChessGame(chessGame);
+        shoot(chessGame, new File(dir, "5f-chess.png"), 12);
+
         System.out.println("done: " + dir.getAbsolutePath());
         System.exit(0);
     }
@@ -97,7 +110,7 @@ public final class UiShots {
     }
 
     private static Msg player(int id, String name, int color, boolean ready, boolean bot, boolean host) {
-        return Msg.of(Protocol.PLAYER)
+        return Msg.of(Net.PLAYER)
                 .put("id", id)
                 .putStr("name", name)
                 .put("c", color)
@@ -109,12 +122,12 @@ public final class UiShots {
     }
 
     private static Msg chat(String from, String text, int color, int kind) {
-        return Msg.of(Protocol.CHAT).putStr("from", from).putStr("text", text).put("c", color).put("kind", kind);
+        return Msg.of(Net.CHAT_OUT).putStr("from", from).putStr("text", text).put("c", color).put("kind", kind);
     }
 
     private static void feedLobby(LobbyScreen lobby) {
         List<Msg> frame = new ArrayList<>();
-        Msg head = Msg.of(Protocol.LOBBY).put("phase", 0).put("host", 1)
+        Msg head = Msg.of(Net.LOBBY).put("phase", 0).put("host", 1)
                 .put("cols", 32).put("rows", 22).put("ms", 100).put("walls", 1).put("max", 8);
         frame.add(head);
         frame.add(player(1, "Vasya", 0, false, false, true));
@@ -132,35 +145,68 @@ public final class UiShots {
 
     private static List<Msg> snapshot(int tick, int ms, boolean second) {
         List<Msg> frame = new ArrayList<>();
-        frame.add(Msg.of(Protocol.SNAP).put("t", tick).put("st", System.nanoTime())
+        frame.add(Msg.of(Net.SNAP).put("t", tick).put("st", System.nanoTime())
                 .put("rate", 32).put("ms", ms)
                 .put("se", 1).put("ss", 8)
                 .put("si", 12).put("sa", 7).put("sm", 5)
                 .put("sx", 3).put("so", 0).put("sl", 731).put("sb", "1,2,2,1,2,2,1,1")
                 .put("ix", 2).put("vok", 84).put("vdr", 1));
-        frame.add(Msg.of(Protocol.FOOD).put("x", 18).put("y", 9).put("k", 0));
-        frame.add(Msg.of(Protocol.FOOD).put("x", 6).put("y", 4).put("k", 1));
-        frame.add(Msg.of(Protocol.FOOD).put("x", 27).put("y", 4).put("k", 3));
-        frame.add(Msg.of(Protocol.FOOD).put("x", 12).put("y", 19).put("k", 2));
-        frame.add(Msg.of(Protocol.FOOD).put("x", 17).put("y", 15).put("k", 0));
+        frame.add(Msg.of(Net.FOOD).put("x", 18).put("y", 9).put("k", 0));
+        frame.add(Msg.of(Net.FOOD).put("x", 6).put("y", 4).put("k", 1));
+        frame.add(Msg.of(Net.FOOD).put("x", 27).put("y", 4).put("k", 3));
+        frame.add(Msg.of(Net.FOOD).put("x", 12).put("y", 19).put("k", 2));
+        frame.add(Msg.of(Net.FOOD).put("x", 17).put("y", 15).put("k", 0));
 
-        frame.add(Msg.of(Protocol.SNAKE).put("p", 1).put("a", 1).put("sc", 30).put("d", 1).put("c", 0).put("ac", 0).put("ls", 0).put("pg", 24)
+        frame.add(Msg.of(Net.SNAKE).put("p", 1).put("a", 1).put("sc", 30).put("d", 1).put("c", 0).put("ac", 0).put("ls", 0).put("pg", 24)
                 .put("g", "15:12,14:12,13:12,12:12,11:12,10:12,10:11,10:10,10:9,9:9,8:9"));
-        frame.add(Msg.of(Protocol.SNAKE).put("p", 2).put("a", 1).put("sc", 20).put("d", 0).put("c", 5).put("ac", 0).put("ls", 0).put("pg", 41)
+        frame.add(Msg.of(Net.SNAKE).put("p", 2).put("a", 1).put("sc", 20).put("d", 0).put("c", 5).put("ac", 0).put("ls", 0).put("pg", 41)
                 .put("g", "22:5,22:6,22:7,21:7,20:7,20:8"));
-        frame.add(Msg.of(Protocol.SNAKE).put("p", 3).put("a", 1).put("sc", 10).put("d", 2).put("c", 3).put("ac", 0).put("ls", 0).put("pg", -1)
+        frame.add(Msg.of(Net.SNAKE).put("p", 3).put("a", 1).put("sc", 10).put("d", 2).put("c", 3).put("ac", 0).put("ls", 0).put("pg", -1)
                 .put("g", "8:18,9:18,10:18,11:18,11:17,11:16"));
-        frame.add(Msg.of(Protocol.SNAKE).put("p", 4).put("a", 0).put("sc", 40).put("d", 1).put("c", 1).put("ac", 0).put("ls", 0).put("pg", 67)
+        frame.add(Msg.of(Net.SNAKE).put("p", 4).put("a", 0).put("sc", 40).put("d", 1).put("c", 1).put("ac", 0).put("ls", 0).put("pg", 67)
                 .put("g", "25:15,25:16,25:17,24:17,23:17"));
         if (second) {
-            frame.add(Msg.of(Protocol.EVENT).put("k", Protocol.EV_EAT).put("p", 1).put("x", 15).put("y", 12));
+            frame.add(Msg.of(Net.EVENT).put("k", Net.EV_EAT).put("p", 1).put("x", 15).put("y", 12));
         }
         return frame;
     }
 
+    private static void feedChessLobby(LobbyScreen lobby) {
+        List<Msg> frame = new ArrayList<>();
+        frame.add(Msg.of(Net.LOBBY).put("phase", 0).put("host", 1)
+                .put("cg", 1).put("cs", 0).put("cd", 2).put("max", 2));
+        frame.add(player(1, "Vasya", 0, true, false, true));
+        frame.add(player(3, "Bot Cobra", 5, false, true, false));
+        lobby.onFrame(frame);
+        lobby.onFrame(List.of(chat("", "Bot Cobra added", 0, 1)));
+        lobby.onFrame(List.of(chat("Vasya", "you are black, good luck", 0, 0)));
+    }
+
+    private static void feedChessGame(GameScreen game) {
+        app.roomView().phase.set(Net.PHASE_RUNNING);
+        app.roomView().fen.set("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2");
+        app.roomView().turn.set(0);
+        app.roomView().players.set(2);
+        app.roomView().host.set(1);
+
+        List<Msg> roster = new ArrayList<>();
+        roster.add(Msg.of(Net.LOBBY).put("phase", 2).put("host", 1)
+                .put("cg", 1).put("cs", 0).put("cd", 2).put("max", 2));
+        roster.add(player(1, "Vasya", 0, true, false, true));
+        roster.add(player(3, "Bot Cobra", 5, false, true, false));
+        game.onFrame(roster);
+
+        GameConfig cfg = new GameConfig();
+        cfg.chess = true;
+        cfg.maxPlayers = 2;
+        Msg start = cfg.write(Net.STARTED.newMsg()).put("phase", Net.PHASE_RUNNING).put("n", 0);
+        game.onFrame(List.of(start));
+        game.onFrame(List.of(chat("Vasya", "your move", 0, 0)));
+    }
+
     private static void feedGame(GameScreen game) {
         List<Msg> roster = new ArrayList<>();
-        roster.add(Msg.of(Protocol.LOBBY).put("phase", 2).put("host", 1)
+        roster.add(Msg.of(Net.LOBBY).put("phase", 2).put("host", 1)
                 .put("cols", 32).put("rows", 22).put("ms", 100).put("walls", 1).put("max", 8));
         roster.add(player(1, "Vasya", 0, false, false, true));
         roster.add(player(2, "Anna", 3, true, false, false));
@@ -168,7 +214,7 @@ public final class UiShots {
         roster.add(player(4, "Max", 1, true, false, false));
         game.onFrame(roster);
 
-        Msg start = Msg.of(Protocol.START).put("phase", 1).put("n", 3);
+        Msg start = Msg.of(Net.STARTED).put("phase", 1).put("n", 3);
         new GameConfig().write(start);
         game.onFrame(List.of(start));
         game.onFrame(List.of(chat("Anna", "I'm on the right, don't cut me off", 3, 0)));
@@ -180,11 +226,11 @@ public final class UiShots {
 
     private static void feedOver(GameScreen game) {
         List<Msg> frame = new ArrayList<>();
-        frame.add(Msg.of(Protocol.OVER).put("n", 4));
-        frame.add(Msg.of(Protocol.RESULT).put("p", 1).putStr("name", "Vasya").put("sc", 120).put("place", 1).put("c", 0).put("a", 1));
-        frame.add(Msg.of(Protocol.RESULT).put("p", 2).putStr("name", "Anna").put("sc", 90).put("place", 2).put("c", 3).put("a", 0));
-        frame.add(Msg.of(Protocol.RESULT).put("p", 3).putStr("name", "Bot Cobra").put("sc", 60).put("place", 3).put("c", 5).put("a", 0));
-        frame.add(Msg.of(Protocol.RESULT).put("p", 4).putStr("name", "Max").put("sc", 30).put("place", 4).put("c", 1).put("a", 0));
+        frame.add(Msg.of(Net.OVER).put("n", 4));
+        frame.add(Msg.of(Net.RESULT).put("p", 1).putStr("name", "Vasya").put("sc", 120).put("place", 1).put("c", 0).put("a", 1));
+        frame.add(Msg.of(Net.RESULT).put("p", 2).putStr("name", "Anna").put("sc", 90).put("place", 2).put("c", 3).put("a", 0));
+        frame.add(Msg.of(Net.RESULT).put("p", 3).putStr("name", "Bot Cobra").put("sc", 60).put("place", 3).put("c", 5).put("a", 0));
+        frame.add(Msg.of(Net.RESULT).put("p", 4).putStr("name", "Max").put("sc", 30).put("place", 4).put("c", 1).put("a", 0));
         game.onFrame(frame);
     }
 }

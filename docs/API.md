@@ -10,14 +10,16 @@ Contents:
 1. Build, classpath and optional libraries
 2. Text message format
 3. Transport and framing
-4. Game protocol
-5. Input, subtick and timestamps
-6. Snapshots and state
-7. Voice protocol and engine
-8. Configuration reference
-9. Reconnect and session resume
-10. Rendering and prediction
-11. Tools and tests
+4. Declared messages, RPCs and sync vars
+5. Hub, lobbies and game protocol
+6. Input, subtick and timestamps
+7. Snapshots and state
+8. Voice protocol and engine
+9. Configuration reference
+10. Snake and chess games
+11. Reconnect and session resume
+12. Rendering and prediction
+13. Tools and tests
 
 ## 1. Build, classpath and optional libraries
 
@@ -89,12 +91,13 @@ A game frame is a UTF-8 text block. Each line is one message and a final `END` l
 frame:
 
 ```
-HELLO|name=QWxleA|color=3|token=...
-IN|n=17|t=105|d=2|s=0.375|ts=918273645
+snake/hello|name=QWxleA|color=3|token=...
+snake/input|n=17|t=105|d=2|s=0.375|ts=918273645
 END
 ```
 
-* The first field is the message type.
+* The first field is the declared message name. The netcode layer (`MsgType`) drops any type that
+  the game did not declare, so a stale peer cannot inject messages the application does not expect.
 * Remaining fields are `key=value` and are separated by `|`.
 * Values written with `Msg.putStr(...)` are Base64 URL-safe without padding and are decoded with
   `Msg.str(...)`.
@@ -122,7 +125,7 @@ enable that dual listener.
 | Traffic | Sent with | Reliability |
 |---|---|---|
 | Game messages | `Connection.send(payload)` / `NetClient.send(payload)` | acknowledged, ordered, fragmented, retransmitted after `resendMs` |
-| Snapshots | `NetServer.broadcast(payload, false)` / `NetClient.sendUnreliable` | fire-and-forget |
+| Snapshots | `Room` → its own observers | fire-and-forget |
 | Voice | `Connection.sendVoice` / `NetClient.sendVoice` | fire-and-forget, dedicated budget |
 
 `NetConfig` controls MTU, retransmission, heartbeat, dead timeouts, reconnect window, backoff and
@@ -143,62 +146,177 @@ raw, so incompressible data never pays a penalty.
 | `NetStats` | counters for one transport | `packetsIn()`, `packetsOut()`, `bytesIn()`, `bytesOut()`, `kbpsIn()` |
 | `NetInfo` | local addresses and port checks | `localAddresses()`, `setPreviewIp`, `primaryIp()`, `portFree`, `freePortFrom` |
 | `LanDiscovery` | beacon + scanner | `Beacon`, `Scanner`, `Found` |
-| `MatchMaker` | waiting list and pairing | `addListener`, `removeListener`, `join`, `leave`, `waiting`, `pollAndNotify`, `clear` |
+| `MatchMaker` | waiting list and pairing | `addListener`, `removeListener`, `join`, `leave`, `waiting`, `waitingNames`, `pollAndNotify`, `clear`, `enabled`, `setEnabled`, `capacity`, `withCapacity`, `timeoutMs`, `withTimeoutMs`, `pairing`, `withPairing` |
 | `ClockSync` | ping/pong clock bookkeeping | `onPingSent`, `onPong`, `serverNanosNow`, `serverSecondsNow`, `rttMs`, `rttMsPrecise`, `jitterMs`, `lossPercent`, `quality`, `offsetNanos`, `millisSincePong`, `synced` |
+| `MsgType` | declared message type | `declare(name)`, `find(name)`, `name()`, `hash()` |
+| `Msg` | one wire message | `of(MsgType)`, `of(Rpc)`, `parse`, `put`, `putStr`, `raw`, `str`, `num`, `numL`, `numD`, `bool`, `has`, `rawFields`, `copy`, `encode`, `enc`, `dec` |
+| `Rpc<T>` | declared channel | `server`, `observers`, `target`, `name`, `type`, `kind`, `codec`, `newMsg`, `write`, `read` |
+| `RpcRouter` | direction-checked dispatch | `on`, `handles`, `dispatch`, `count`, `serverSide` |
+| `SyncVar<T>` | replicated field | `path`, `get`, `set`, `markDirty`, `isDirty`, `onChange` |
+| `NetworkBehaviour` | group of sync vars | `name`, `syncVar`, `syncVars`, `onStartServer`, `onStartClient`, `onStopServer`, `onStopClient` |
+| `NetworkObject` | replicated object and its observers | `id`, `owner`, `addBehaviour`, `behaviour`, `addObserver`, `removeObserver`, `setObservers`, `observers`, `spawn`, `despawn`, `markAllDirty`, `drainSync`, `applySync`, `syncMessages` |
+| `NetworkServer` | server replication | `spawn`, `despawn`, `object`, `objects`, `replicate`, `sendFull`, `sendObservers`, `sendTarget`, `sendExcept`, `addObserver`, `removeObserver`, `setObservers` |
+| `NetworkClient` | client-side mirror | `object`, `addBehaviour`, `apply`, `reset`, `start` |
 
 `UdpPeer` and `TcpTransport` are internal implementations of `Transport` and are not part of the
 public API.
 
-## 4. Game protocol
+## 4. Declared messages, RPCs and sync vars
+
+The engine contains no game protocol constants. `netcore.netcode` provides primitives, and the game
+declares every message in `snakenet.net.Net`.
+
+### Message declaration
+
+```java
+MsgType t = MsgType.declare("game/hello");   // idempotent, shared by all callers
+MsgType again = MsgType.declare("game/hello"); // same instance
+Msg m = Msg.of(t).put("n", 3).putStr("name", "Alex");
+Msg parsed = Msg.parse(m.encode());          // null when the type was never declared
+```
+
+`MsgType.find(name)` returns a declaration or `null`; `hash()` is a stable FNV-1a id. `Msg.parse`
+silently drops unknown types, which is how undeclared or removed messages are ignored instead of
+failing the whole frame.
+
+### RPC kinds
+
+`Rpc<T>` binds a declared name to a direction and a codec:
+
+```java
+Rpc<Msg> HELLO = Rpc.server("snake/hello", Codecs.MSG);       // client executes on server
+Rpc<Msg> SNAP = Rpc.observers("snake/snapshot", Codecs.MSG);  // server fans out to observers
+Rpc<Msg> WELCOME = Rpc.target("snake/welcome", Codecs.MSG);   // server targets one connection
+```
+
+`Codecs.MSG` copies the message fields; `Codecs.NONE` is for RPCs without parameters. `newMsg()`,
+`write(value)`, `write(message, value)` and `read(message)` apply the codec.
+
+`RpcRouter(boolean serverSide)` rejects a registration whose direction is illegal on that side, so a
+client cannot accidentally register a client-to-server RPC and a server cannot register an observer
+RPC. `on(rpc, handler)`, `handles(message)` and `dispatch(from, message)` are the entry points.
+
+### SyncVars
+
+A `NetworkBehaviour` groups replicated fields, and each field becomes a `SyncVar<T>`:
+
+```java
+final class RoomState extends NetworkBehaviour {
+    final SyncVar<Integer> phase = syncVar("phase", ValueCodecs.INT, 0);
+    final SyncVar<String> fen = syncVar("fen", ValueCodecs.STRING, "");
+
+    RoomState() {
+        super("room");
+    }
+}
+```
+
+The wire path is `behaviour.field` (`room.phase`, `room.fen`). `set` marks the field dirty only when
+the value changes; `onChange` fires on the receiving side. `ValueCodecs` ships `STRING`, `INT`,
+`LONG`, `BOOL`, `FLOAT` and `DOUBLE`.
+
+### Objects and observers
+
+`NetworkObject(id)` owns behaviours and a set of observers — the connections allowed to see it.
+`drainSync()` returns one `nc:sync` message with `o` (object id) and one key per dirty field, or
+`null` when nothing changed. Only observers receive the delta, which is what lets one server host
+many independent lobbies without leaking state between them.
+
+```java
+NetworkServer netcode = new NetworkServer((connection, payload, reliable) ->
+        connection.send(payload, reliable));
+
+NetworkObject object = new NetworkObject(10_000 + roomId);
+object.addBehaviour(new RoomState());
+netcode.spawn(object, null);
+netcode.addObserver(object, connection);
+
+netcode.replicate();                     // per tick: dirty fields to observers
+netcode.sendFull(connection, object);    // full state for a late joiner
+```
+
+`NetworkClient` holds a local `NetworkObject` with the same behaviour shape. `apply(message)` handles
+`nc:sync` before the application sees the frame, so game screens can read `syncVar.get()` directly.
+Field paths, not Java classes, define the contract between the two sides.
+
+## 5. Hub, lobbies and game protocol
+
+A server is a hub. A client connects once, receives the lobby list, and then creates or joins one
+lobby. Snake and chess lobbies can live side by side on the same server, and every lobby has its own
+players, settings and replicated state.
+
+Flow: `HELLO` → `HUB` + `ROOM…` → `LOBBY_CREATE` / `LOBBY_JOIN` → `JOINED` + `WELCOME` → gameplay.
+`LOBBY_LEAVE` returns to the hub without dropping the connection or the session token.
 
 ### Client to server
 
-| Type | Fields | Meaning |
+All of these are declared with `Rpc.server(...)` in `snakenet.net.Net`.
+
+| Declared name | Fields | Meaning |
 |---|---|---|
-| `HELLO` | `name`, `color`, `token` | join; `token` is the session token for resume |
-| `IN` | `n`, `t`, `d`, `s`, `ts` | input: sequence, tick, direction, fraction, server timestamp |
-| `READY` | `v` | ready state in the lobby |
-| `CHAT` | `text` | chat line |
-| `SET` | `k`, `v` | host setting change |
-| `BOT` | `op` | host bot command (`add` / `remove`) |
-| `START` | — | host starts the countdown |
-| `AGAIN` | — | host returns to the lobby after `OVER` |
-| `KICK_PLAYER` | `p` | host kicks a player id |
+| `snake/hello` | `name`, `color`, `token` | identify the session; `token` allows resume across lobbies |
+| `snake/lobby/list` | — | ask for the hub and the current lobby list |
+| `snake/lobby/create` | `kind`, `name`, plus config fields | create a lobby on this hub; `kind` is `0` snake or `1` chess |
+| `snake/lobby/join` | `id` | join an advertised lobby |
+| `snake/lobby/leave` | — | leave the current lobby and return to the hub |
+| `snake/input` | `n`, `t`, `d`, `s`, `ts` | input: sequence, tick, direction, fraction, server timestamp |
+| `snake/ready` | `v` | ready state in the lobby |
+| `snake/chat` | `text` | chat line |
+| `snake/setting` | `k`, `v` | host setting change |
+| `snake/bot` | `op` | host bot command (`add` / `del`) |
+| `snake/start` | — | host starts the countdown |
+| `snake/again` | — | host returns to the lobby after `OVER` |
+| `snake/kick` | `p` | host kicks a player id |
+| `chess/move` | `p`, `f`, `t`, `pr` | chess move from square `f` to square `t`; `pr` promotion piece, `0` none. Only the side to move may send, validated against the legal move list |
 
 `SET` keys: `size` (index into `GameConfig.SIZE`), `speed` (index into `SPEED_CELLS`), `rate`
-(index into `TICK_RATES`), `subtick` (0/1), `walls` (0/1). Only the host may change settings, and
-only in the lobby. Changing `rate` or `subtick` restarts the tick runner.
+(index into `TICK_RATES`), `subtick` (0/1), `walls` (0/1), `chessSide` (0 white, 1 black, 2 random)
+and `chessBot` (search depth 1..4). Only the host may change settings, and only in the lobby.
+Changing `rate` or `subtick` restarts the tick runner. Chess is a separate game kind, not a setting.
 
 ### Server to client
 
-| Type | Fields | Meaning |
+Declared with `Rpc.target(...)` for one connection and `Rpc.observers(...)` for every member of the
+lobby.
+
+| Declared name | Fields | Meaning |
 |---|---|---|
-| `WELCOME` | `pid`, `host`, `phase`, `rate`, plus config fields | identity and current phase |
-| `LOBBY` | `phase`, `host`, `tick`, plus config fields, followed by `P` lines | lobby snapshot |
-| `P` | `id`, `name`, `c`, `ready`, `bot`, `host`, `alive`, `rc`, `pg` | one lobby player |
-| `START` | `phase`, `n`, plus config fields | round begins, countdown length |
-| `COUNT` | `n` | countdown seconds |
-| `SNAP` | fields in section 6 | authoritative tick snapshot |
-| `F` | `x`, `y`, `k` | food |
-| `S` | `p`, `a`, `sc`, `d`, `c`, `ac`, `ls`, `pg`, `g` | one snake |
-| `E` | `k`, `p`, `x`, `y` | event: `0` eat, `1` die |
-| `A` | `n`, `t` | input `n` acknowledged on tick `t` |
-| `OVER` | `n` | round finished, `n` results follow |
-| `R` | `p`, `name`, `sc`, `place`, `c`, `a` | one result row |
-| `CHAT` | `from`, `text`, `kind`, `p`, `c` | chat; `kind=0` player, `kind=1` system |
-| `ERR` | `msg` | user-visible error |
-| `KICK` | `msg` | connection is being closed |
+| `snake/hub` | `sid`, `server`, `rooms` | hub identity; followed by one `snake/room` per lobby |
+| `snake/room` | `id`, `kind`, `name`, `players`, `max`, `phase` | one advertised lobby |
+| `snake/lobby/joined` | `id`, `kind`, `name`, `host` | you are now inside this lobby |
+| `snake/lobby/left` | — | you are back at the hub |
+| `snake/welcome` | `pid`, `host`, `phase`, `rate`, `room`, `kind`, `cc`, plus config fields | identity and current phase |
+| `snake/lobby` | `phase`, `host`, `tick`, plus config fields, followed by `snake/player` lines | lobby snapshot |
+| `snake/player` | `id`, `name`, `c`, `ready`, `bot`, `host`, `alive`, `rc`, `pg` | one lobby player |
+| `snake/started` | `phase`, `n`, plus config fields | round begins, countdown length |
+| `snake/count` | `n` | countdown seconds |
+| `snake/snapshot` | fields in section 7 | authoritative tick snapshot |
+| `snake/food` | `x`, `y`, `k` | food |
+| `snake/body` | `p`, `a`, `sc`, `d`, `c`, `ac`, `ls`, `pg`, `g` | one snake |
+| `snake/event` | `k`, `p`, `x`, `y` | event: `0` eat, `1` die |
+| `snake/ack` | `n`, `t` | input `n` acknowledged on tick `t` |
+| `snake/over` | `n` | round finished, `n` results follow |
+| `snake/result` | `p`, `name`, `sc`, `place`, `c`, `a` | one result row |
+| `snake/chat/out` | `from`, `text`, `kind`, `p`, `c` | chat; `kind=0` player, `kind=1` system |
+| `snake/error` | `msg` | user-visible error |
+| `snake/kicked` | `msg` | connection is being closed |
+| `chess/move/out` | `p`, `f`, `t`, `pr`, `fen` | one applied move with the resulting position |
+| `chess/end` | `w`, `r` | chess finished: `w` winner player id (`-1` for a draw), `r` reason (`checkmate` / `stalemate` / `draw`) |
 
-`WELCOME` and `START` also carry the configuration fields written by `GameConfig.write(...)`:
-`cols`, `rows`, `cps`, `rate`, `sub`, `subs`, `walls`, `max`, `udp`, `vo`, `vm`, `vj`, `vx`.
-`LOBBY` carries the same settings so late joiners and spectators stay in sync.
+Replicated state is additionally carried by the netcode layer as `nc:sync` messages: `o` is the room
+object id and every other key is a declared sync-var path (`room.phase`, `room.fen`, `room.turn`,
+`room.winner`, `room.reason`, `room.players`, `room.host`).
 
-## 5. Input, subtick and timestamps
+`WELCOME`, `STARTED` and `LOBBY` carry the configuration fields written by `GameConfig.write(...)`:
+`cols`, `rows`, `cps`, `rate`, `sub`, `subs`, `walls`, `max`, `udp`, `vo`, `vm`, `vj`, `vx`, `cg`,
+`cs`, `cd`.
 
-`IN` is the only gameplay input message:
+## 6. Input, subtick and timestamps
+
+`snake/input` (`Net.IN`) is the only gameplay input message:
 
 ```java
-app.send(Msg.of(Protocol.IN)
+app.send(Net.IN.newMsg()
         .put("d", direction)                 // 0 up, 1 right, 2 down, 3 left
         .put("t", command.tick)              // requested server tick
         .put("s", String.format(Locale.ROOT, "%.3f", command.sub))
@@ -242,9 +360,9 @@ Turns remain grid-aligned:
 
 When several inputs target the same tick, the largest `sub` wins; the rest are merged and counted.
 
-## 6. Snapshots and state
+## 7. Snapshots and state
 
-`SNAP` fields:
+`snake/snapshot` (`SNAP`) fields:
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -265,7 +383,7 @@ When several inputs target the same tick, the largest `sub` wins; the rest are m
 | `vok` | long | voice frames accepted |
 | `vdr` | long | voice frames rejected |
 
-Snake field `S`:
+Snake field `snake/body` (`S`):
 
 | Field | Meaning |
 |---|---|
@@ -282,7 +400,7 @@ Snake field `S`:
 A client interpolates remote snakes between snapshots and predicts its own snake locally. The
 snapshot `t` and `st` are the anchors for both.
 
-## 7. Voice protocol and engine
+## 8. Voice protocol and engine
 
 ### Payloads
 
@@ -358,7 +476,7 @@ META-INF/services/netcore.voice.WebRtcVoiceAdapter   -> your implementation
 
 The build and run scripts pick up `lib/*.jar` automatically.
 
-## 8. Configuration reference
+## 9. Configuration reference
 
 ### `GameConfig` — the game-owned tuning hub
 
@@ -374,6 +492,9 @@ hardcode game policy. Defaults:
 | `subSteps` | 8 | advertised input slots per tick |
 | `maxPlayers` | 8 | lobby capacity |
 | `walls` | true | walls kill; false wraps |
+| `chess` | false | room plays chess instead of snake (set from the lobby kind) |
+| `chessSide` | 0 | host colour: 0 white, 1 black, 2 random |
+| `chessBotDepth` | 2 | chess bot search depth, 1..4 |
 | `udp` | true | UDP transport; false selects TCP |
 | `preciseSpin` | true | spin the end of each tick wait |
 | `maxCatchUp` | 4 | late ticks before resync |
@@ -456,15 +577,42 @@ voiceActivity, vadThreshold, maxPacketBytes, maxPacketsPerSec, maxBytesPerSec, m
 Tuners: `withMode`, `withJitter`, `withVoiceActivity`, `withLimits`. `DEFAULT` is 16 kHz mono,
 320 samples, 20 ms.
 
-## 9. Reconnect and session resume
+## 10. Snake and chess games
 
-The client sends a random session token in `HELLO`. The server maps the token to the player.
+Snake and chess are two game kinds selected on the home screen. Each has its own standalone-server
+and lobby-creation path; chess is no longer a toggle inside a snake lobby.
 
-* A dropped player outside the lobby is marked `reconnecting` and kept for 30 seconds.
-* A repeated `HELLO` with the same token resumes the player and snake, keeps the player id, and
-  clears pending inputs.
-* If the token is used by a different live connection, the old connection receives `KICK` and is
-  closed after the new one is admitted.
+* `kind = 0` (`Net.KIND_SNAKE`): the room runs the snake simulation described in sections 6–7. The
+  host configures board size, speed, tick rate, subtick and walls.
+* `kind = 1` (`Net.KIND_CHESS`): the room is a two-player chess match. The host picks a colour
+  (`chessSide`) and a bot depth (`chessBotDepth`), then starts the match.
+
+Chess flow:
+
+* The room uses one board and always has two sides. If the host starts alone, a bot is added
+  automatically; if a friend joins, they take the opposite colour.
+* Authoritative state is replicated with SyncVars: `room.fen`, `room.turn`, `room.phase`,
+  `room.winner` and `room.reason`. The client rebuilds the position with `Chess.fromFen` and can
+  render the board before any move message arrives.
+* Players move by sending `chess/move` (`from`, `to`, `promotion`). The server validates the move
+  against the legal move list of the side to move and drops illegal or out-of-turn moves.
+* Bots answer while it is their turn using an alpha-beta search of depth `chessBotDepth` (1..4),
+  throttled so the server stays responsive.
+* `chess/move/out` carries the applied move and the resulting FEN for move animation.
+* The game ends on checkmate, stalemate or a draw via `chess/end` (`w` winner, `r` reason); the phase
+  becomes `OVER` and the result overlay is driven by the room sync vars.
+
+## 11. Reconnect and session resume
+
+The client sends a random session token in `snake/hello`. The server maps the token to a session, and
+the session follows the player from the hub into a lobby.
+
+* A dropped player outside the lobby is removed from the session map; the connection is gone.
+* A dropped player inside a lobby is marked `reconnecting` and kept for 30 seconds.
+* A repeated `snake/hello` with the same token resumes the same session and player id, and clears
+  pending inputs; if the session is in a lobby, the room re-sends `WELCOME` and the full sync state.
+* If the token is used by a different live connection, the old connection receives `snake/kicked`
+  and is closed after the new one is admitted.
 * A repeated `HELLO` on a UDP connection whose address changed is matched by the token, so no
   duplicate player is created.
 * After 30 seconds the player is removed and their snake dies.
@@ -474,7 +622,7 @@ UDP port. `onLinkLost` fires once, `onLinkRestored` fires on recovery, and the a
 `HELLO` with the same token. The UI fades in after 500 ms and shows a static white icon; only the
 text animates. `RECONNECTED` appears only if the interruption lasted longer than 750 ms.
 
-## 10. Rendering and prediction
+## 12. Rendering and prediction
 
 The simulation is grid-based, but the renderer is continuous:
 
@@ -492,7 +640,7 @@ The simulation is grid-based, but the renderer is continuous:
 Input prediction uses the same pending/queued turn rule as the server, so a locally predicted turn
 and the authoritative turn land on the same cell boundary.
 
-## 11. Tools and tests
+## 13. Tools and tests
 
 ```bat
 java -Djava.awt.headless=true -cp "SnakeNET.jar;NetCore.jar" snakenet.SelfTest
@@ -502,15 +650,16 @@ java -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.ChaosProxy 45990 127.0.0.1 45
 java -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.UiShots docs\screens
 ```
 
-`SelfTest` runs 160 checks: ticks and clock maths, motion continuity, grid-aligned turns, prediction
+`SelfTest` runs 238 checks: ticks and clock maths, motion continuity, grid-aligned turns, prediction
 and replay, compression, quality scoring, subtick ordering and counters, voice jitter and guard,
 continuous render maths at 16 and 32 Hz, tuning factories, UDP/TCP transport, flood protection,
-auto-reconnect, UDP same-address reconnect, LAN discovery, a full three-client round, bots, kicks
-and reconnects.
+auto-reconnect, UDP same-address reconnect, LAN discovery, matchmaking pairing policies and timeouts,
+declared messages and RPC direction, sync-var replication, hub multi-lobby isolation, chess rules and
+search, full three-client rounds, bots, kicks and reconnects.
 
-`SubtickProbe` starts a headless server, sends four inputs with different fractions for one tick,
-and prints the server counters, the bucket histogram and the winning direction. It exits non-zero
-on failure.
+`SubtickProbe` starts a headless server and hub, creates a lobby, sends four inputs with different
+fractions for one tick, and prints the server counters, the bucket histogram and the winning
+direction. It exits non-zero on failure.
 
 `NetBench` measures compression and loopback throughput and prints the quality table. `ChaosProxy`
 adds latency, jitter and loss to UDP. `UiShots` renders the documentation screenshots off-screen.

@@ -3,8 +3,8 @@ package snakenet.tools;
 import snakenet.client.GameClient;
 import snakenet.game.GameConfig;
 import snakenet.game.SnakeState;
-import snakenet.net.Msg;
-import snakenet.net.Protocol;
+import netcore.netcode.Msg;
+import snakenet.net.Net;
 import snakenet.server.GameServer;
 
 import java.util.List;
@@ -15,6 +15,7 @@ public final class SubtickProbe {
     private static volatile Msg lastSnap;
     private static volatile int pid = -1;
     private static volatile int myDir = -1;
+    private static volatile boolean hubSeen;
 
     public static void main(String[] args) throws Exception {
         int rate = args.length > 0 ? parseInt(args[0], 64) : 64;
@@ -38,9 +39,10 @@ public final class SubtickProbe {
             @Override
             public void onFrame(List<Msg> frame) {
                 for (Msg m : frame) {
-                    if (m.is(Protocol.SNAP)) lastSnap = m;
-                    if (m.is(Protocol.WELCOME)) pid = m.num("pid", -1);
-                    if (m.is(Protocol.SNAKE) && m.num("p", -1) == pid) myDir = m.num("d", -1);
+                    if (m.is(Net.HUB)) hubSeen = true;
+                    if (m.is(Net.SNAP)) lastSnap = m;
+                    if (m.is(Net.WELCOME)) pid = m.num("pid", -1);
+                    if (m.is(Net.SNAKE) && m.num("p", -1) == pid) myDir = m.num("d", -1);
                 }
             }
 
@@ -52,15 +54,24 @@ public final class SubtickProbe {
             public void onClosed(String reason) {
             }
         });
-        client.send(Msg.of(Protocol.HELLO).putStr("name", "Probe").put("color", 0).putStr("token", "probe-tok"));
+        client.send(Msg.of(Net.HELLO).putStr("name", "Probe").put("color", 0).putStr("token", "probe-tok"));
 
+        if (!waitFor(() -> hubSeen, 4000)) {
+            fail("no HUB from the server");
+            client.close();
+            server.stop();
+            System.exit(1);
+        }
+        client.send(cfg.write(Net.LOBBY_CREATE.newMsg())
+                .put("kind", Net.KIND_SNAKE)
+                .putStr("name", "Probe lobby"));
         if (!waitFor(() -> pid >= 0, 4000)) {
             fail("no WELCOME from the server");
             client.close();
             server.stop();
             System.exit(1);
         }
-        client.send(Msg.of(Protocol.START));
+        client.send(Msg.of(Net.START));
         if (!waitFor(() -> lastSnap != null, 8000)) {
             fail("round did not start");
             client.close();
@@ -80,7 +91,7 @@ public final class SubtickProbe {
         float[] subs = {0.050f, 0.350f, 0.650f, 0.950f};
         int[] dirs = {alt, alt, alt, target};
         for (int i = 0; i < subs.length; i++) {
-            client.send(Msg.of(Protocol.IN)
+            client.send(Msg.of(Net.IN)
                     .put("d", dirs[i])
                     .put("t", at)
                     .put("s", String.format(Locale.ROOT, "%.3f", subs[i]))
