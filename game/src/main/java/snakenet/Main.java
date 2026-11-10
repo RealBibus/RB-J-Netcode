@@ -15,20 +15,25 @@ public final class Main {
         installCrashHandler();
 
         String screen = null;
+        String game = null;
         boolean demo = false;
         boolean lobbyDemo = false;
         for (String a : args) {
             if (a.startsWith("--screen=")) screen = a.substring("--screen=".length());
+            if (a.startsWith("--game=")) game = a.substring("--game=".length());
             if (a.equals("--demo")) demo = true;
             if (a.equals("--demo-lobby")) lobbyDemo = true;
         }
         final String target = screen;
+        final int kind = snakenet.net.Net.parseKind(game);
+        final boolean hasGame = game != null;
         final boolean runDemo = demo;
         final boolean stayInLobby = lobbyDemo;
 
         SwingUtilities.invokeLater(() -> {
             Prefs prefs = new Prefs();
             App app = new App(prefs);
+            if (hasGame) app.setGameKind(kind);
             app.start();
             if (target != null) {
                 switch (target) {

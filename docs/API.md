@@ -645,6 +645,8 @@ and the authoritative turn land on the same cell boundary.
 ```bat
 java -Djava.awt.headless=true -cp "SnakeNET.jar;NetCore.jar" snakenet.SelfTest
 java -Djava.awt.headless=true -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.SubtickProbe 64 8
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.server.StandaloneServer --game=snake --port=45800
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.server.StandaloneServer --game=chess --port=45801
 java -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.NetBench
 java -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.ChaosProxy 45990 127.0.0.1 45800 80 20 2
 java -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.UiShots docs\screens

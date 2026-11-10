@@ -61,6 +61,27 @@ NetClient client = NetClient.connect("127.0.0.1", 45800, new NetClient.Listener(
 
 See docs/API.md for the complete reference of every class, protocol field and configuration option.
 
+## Run
+
+```bat
+run.bat              general launcher (menu)
+run-snake.bat        snake example / host screen
+run-chess.bat        chess example / host screen
+server-snake.bat    snake dedicated server
+server-chess.bat    chess dedicated server
+```
+
+Each game has its own example folder:
+
+```bat
+examples\snake\play.bat
+examples\snake\server.bat
+examples\chess\play.bat
+examples\chess\server.bat
+```
+
+The snake server listens on port 45800 and the chess server on port 45801.
+
 ## Declared messages and replication
 
 The engine ships no game protocol table. The host application declares each message as an RPC, and

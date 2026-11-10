@@ -17,6 +17,7 @@ engine/src/main/java/netcore/
   predict/   Predictor, SimModel, InputCommand, Correction, PredictionConfig
   voice/     VoiceMode, VoiceConfig, VoiceEngine, VoicePacket, VoiceJitterBuffer,
              VoiceGuard, WebRtcSupport, WebRtcVoiceAdapter
+  snakenet/   GameServer, Room, StandaloneServer
 ```
 
 Java 25 or newer. Build it with `build.bat`, which produces `NetCore.jar`. A game only needs
@@ -525,6 +526,20 @@ carries the fraction; the game decides what it means. In snake:
 execute.
 
 ## 7. Tests and tools
+
+### Standalone dedicated server
+
+The game ships a headless server entry point. It starts the hub, lets clients create lobbies, and
+stops with Ctrl+C. No client window is created:
+
+```bat
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.server.StandaloneServer --game=snake --port=45800
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.server.StandaloneServer --game=chess --port=45801
+```
+
+The UI launchers are thin wrappers around it: `run-snake.bat` / `server-snake.bat` and
+`run-chess.bat` / `server-chess.bat`, plus the example folders `examples/snake/` and
+`examples/chess/`.
 
 ```bat
 build.bat

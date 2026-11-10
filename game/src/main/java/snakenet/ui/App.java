@@ -54,6 +54,7 @@ public final class App {
     private int roomId = -1;
     private String roomName = "";
     private boolean inLobby;
+    private int roomPhase = Net.PHASE_LOBBY;
     private GameConfig pendingCreate;
     private final List<RoomInfo> hubRooms = new ArrayList<>();
 
@@ -380,6 +381,7 @@ public final class App {
         roomId = -1;
         roomName = "";
         roomHost = false;
+        roomPhase = Net.PHASE_LOBBY;
         roomView.reset();
         window.show(browserScreen());
     }
@@ -445,6 +447,7 @@ public final class App {
         roomId = -1;
         roomName = "";
         inLobby = false;
+        roomPhase = Net.PHASE_LOBBY;
         hubSid = -1;
         serverName = "";
         hubRooms.clear();
@@ -501,18 +504,21 @@ public final class App {
                 roomName = m.str("name");
                 setGameKind(m.num("kind", gameKind));
                 inLobby = true;
+                roomPhase = Net.PHASE_LOBBY;
                 log("joined lobby " + roomName + " (#" + roomId + ")");
             } else if (m.is(Net.LEFT)) {
                 inLobby = false;
                 roomId = -1;
                 roomName = "";
                 roomHost = false;
+                roomPhase = Net.PHASE_LOBBY;
                 roomView.reset();
                 log("left the lobby");
             } else if (m.is(Net.WELCOME)) {
                 myId = m.num("pid", -1);
                 roomHost = m.num("host", 0) == 1;
                 roomId = m.num("room", roomId);
+                roomPhase = m.num("phase", roomPhase);
                 String rn = m.str("roomName");
                 if (!rn.isBlank()) roomName = rn;
                 setGameKind(m.num("kind", gameKind));
@@ -537,6 +543,8 @@ public final class App {
 
         updateRooms(hub, roomMsgs);
 
+        if (lobbyPhase >= 0) roomPhase = lobbyPhase;
+
         if (pendingCreate != null && hub) {
             GameConfig cfg = pendingCreate;
             pendingCreate = null;
@@ -548,14 +556,17 @@ public final class App {
         if (browser != null) browser.onFrame(frame);
 
         if (start) {
-            if (startMsg != null) applyVoice(GameConfig.read(startMsg, netDefaults));
+            if (startMsg != null) {
+                applyVoice(GameConfig.read(startMsg, netDefaults));
+                roomPhase = startMsg.num("phase", Net.PHASE_RUNNING);
+            } else {
+                roomPhase = Net.PHASE_RUNNING;
+            }
             window.show(gameScreen());
-        } else if (inLobby && window.current() != lobbyScreen()) {
+        } else if (inLobby && roomPhase == Net.PHASE_LOBBY && window.current() != lobbyScreen()) {
             window.show(lobbyScreen());
         } else if (!inLobby && roomId < 0 && window.current() == gameScreen()) {
             window.show(browserScreen());
-        } else if (lobbyPhase == 0 && window.current() == gameScreen()) {
-            window.show(lobbyScreen());
         }
     }
 
