@@ -529,26 +529,28 @@ execute.
 
 ### Standalone dedicated server
 
-The game ships a headless server entry point. It starts the hub, lets clients create lobbies, and
-stops with Ctrl+C. No client window is created:
+The games ship independent headless server entry points. Each starts a hub, lets clients create
+lobbies, and stops with Ctrl+C. No client window is created:
 
 ```bat
-java -cp "SnakeNET.jar;NetCore.jar" snakenet.server.StandaloneServer --game=snake --port=45800
-java -cp "SnakeNET.jar;NetCore.jar" snakenet.server.StandaloneServer --game=chess --port=45801
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.SnakeServer --port=45800
+java -cp "ChessNET.jar;NetCore.jar" snakenet.chess.ChessServer --port=45801
 ```
 
-The UI launchers are thin wrappers around it: `run-snake.bat` / `server-snake.bat` and
+The UI launchers are thin wrappers around these: `run-snake.bat` / `server-snake.bat` and
 `run-chess.bat` / `server-chess.bat`, plus the example folders `examples/snake/` and
 `examples/chess/`.
 
 ```bat
 build.bat
-java -Djava.awt.headless=true -cp "SnakeNET.jar;NetCore.jar" snakenet.SelfTest
-java -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.SubtickProbe 64 8
+java -Djava.awt.headless=true -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.SelfTest
+java -Djava.awt.headless=true -cp "ChessNET.jar;NetCore.jar" snakenet.chess.SelfTest
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.tools.SubtickProbe 64 8
 ```
 
-`SelfTest` covers ticks, the tick clock, prediction and replay, compression, quality scoring,
-subtick ordering and counters, voice jitter/guard, continuous rendering, tuning factories, UDP and
-TCP transport, flood protection, auto-reconnect, UDP same-address reconnect, LAN discovery, declared
-messages and RPC direction, sync-var replication, hub multi-lobby isolation, chess rules and search,
-and several full networked rounds including bots and reconnects.
+The snake self-test covers ticks, the tick clock, prediction and replay, compression, quality
+scoring, subtick ordering and counters, voice jitter/guard, continuous rendering, tuning factories,
+UDP and TCP transport, flood protection, auto-reconnect, UDP same-address reconnect, LAN discovery,
+declared messages and RPC direction, sync-var replication, hub multi-lobby isolation, and several
+full networked snake rounds including bots and reconnects. The chess self-test covers the rules,
+configuration, search bot and a dedicated-server chess round.

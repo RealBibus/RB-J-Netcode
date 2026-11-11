@@ -14,7 +14,7 @@ if defined JAVA_HOME if exist "%JAVA_HOME%\bin\java.exe" set "JAVA=%JAVA_HOME%\b
 if not defined JAVA set "JAVA=C:\Program Files\Java\jdk-25.0.5.0.3\bin\java.exe"
 if not exist "%JAVA%" set "JAVA=java"
 
-"%JAVA%" -cp "SnakeNET.jar;NetCore.jar" snakenet.server.StandaloneServer --game=snake --port=45800
+"%JAVA%" -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.SnakeServer --port=45800
 echo.
 echo   Snake server stopped.
 pause

@@ -4,10 +4,22 @@ setlocal enabledelayedexpansion
 title SNAKE NET
 cd /d "%~dp0"
 
-if not exist "SnakeNET.jar" (
+set "GAME=snake"
+for %%a in (%*) do (
+  if "%%a"=="--game=chess" set "GAME=chess"
+)
+if "!GAME!"=="chess" (
+  set "GAMEJAR=ChessNET.jar"
+  set "GAMEMAIN=snakenet.chess.ChessMain"
+) else (
+  set "GAMEJAR=SnakeNET.jar"
+  set "GAMEMAIN=snakenet.snake.SnakeMain"
+)
+
+if not exist "!GAMEJAR!" (
   echo.
-  echo   SnakeNET.jar not found.
-  echo   Run build.bat first - it builds the engine and the game.
+  echo   !GAMEJAR! not found.
+  echo   Run build.bat first - it builds the engine and both games.
   echo.
   pause
   exit /b 1
@@ -59,9 +71,9 @@ set "JAVAW=%JAVA:java.exe=javaw.exe%"
 set "EXTRA_CP="
 if exist "lib\*.jar" set "EXTRA_CP=;lib\*"
 if exist "%JAVAW%" (
-  start "" "%JAVAW%" -cp "SnakeNET.jar;NetCore.jar!EXTRA_CP!" snakenet.Main %*
+  start "" "%JAVAW%" -cp "!GAMEJAR!;NetCore.jar!EXTRA_CP!" !GAMEMAIN! %*
 ) else (
-  start "" "%JAVA%" -cp "SnakeNET.jar;NetCore.jar!EXTRA_CP!" snakenet.Main %*
+  start "" "%JAVA%" -cp "!GAMEJAR!;NetCore.jar!EXTRA_CP!" !GAMEMAIN! %*
 )
 exit /b 0
 

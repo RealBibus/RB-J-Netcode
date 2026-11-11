@@ -25,12 +25,13 @@ Contents:
 
 ```bat
 build.bat
-java -cp "SnakeNET.jar;NetCore.jar" snakenet.Main
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.SnakeMain
+java -cp "ChessNET.jar;NetCore.jar" snakenet.chess.ChessMain
 ```
 
-`build.bat` compiles the engine first, then the game, and writes `NetCore.jar` and `SnakeNET.jar`.
-The compiler and runtime are JDK 25; the scripts find the JDK through `JAVA_HOME`, `PATH` or the
-usual install folders.
+`build.bat` compiles the engine first, then each game independently. It writes `NetCore.jar`,
+`SnakeNET.jar` and `ChessNET.jar`. The compiler and runtime are JDK 25; the scripts find the JDK
+through `JAVA_HOME`, `PATH` or the usual install folders.
 
 If a `lib` folder exists, both scripts add `lib/*.jar` to the compile and run classpath. The folder
 is empty by default. It is used only for the optional WebRTC adapter and `webrtc-java` natives.
@@ -303,13 +304,19 @@ lobby.
 | `chess/move/out` | `p`, `f`, `t`, `pr`, `fen` | one applied move with the resulting position |
 | `chess/end` | `w`, `r` | chess finished: `w` winner player id (`-1` for a draw), `r` reason (`checkmate` / `stalemate` / `draw`) |
 
+Both games use the same message shapes but declare their own names. The table above shows the
+snake names; the chess protocol uses the `chess/` prefix for every hub, lobby and chat message
+(`chess/hub`, `chess/welcome`, `chess/lobby`, `chess/player`, `chess/chat/out`, and so on) plus the
+two chess-specific messages. The two protocols never need to agree.
+
 Replicated state is additionally carried by the netcode layer as `nc:sync` messages: `o` is the room
 object id and every other key is a declared sync-var path (`room.phase`, `room.fen`, `room.turn`,
 `room.winner`, `room.reason`, `room.players`, `room.host`).
 
-`WELCOME`, `STARTED` and `LOBBY` carry the configuration fields written by `GameConfig.write(...)`:
-`cols`, `rows`, `cps`, `rate`, `sub`, `subs`, `walls`, `max`, `udp`, `vo`, `vm`, `vj`, `vx`, `cg`,
-`cs`, `cd`.
+Snake `WELCOME`, `STARTED` and `LOBBY` carry the configuration fields written by the snake
+`GameConfig.write(...)`: `cols`, `rows`, `cps`, `rate`, `sub`, `subs`, `walls`, `self`, `max`,
+`udp`, `vo`, `vm`, `vj`, `vx`. Chess writes `rate`, `max`, `udp`, `vo`, `vm`, `vj`, `vx`, `cs`,
+`cd`.
 
 ## 6. Input, subtick and timestamps
 
@@ -579,13 +586,16 @@ Tuners: `withMode`, `withJitter`, `withVoiceActivity`, `withLimits`. `DEFAULT` i
 
 ## 10. Snake and chess games
 
-Snake and chess are two game kinds selected on the home screen. Each has its own standalone-server
-and lobby-creation path; chess is no longer a toggle inside a snake lobby.
+Snake and chess are two independent programs built on the same engine. Each has its own JAR,
+protocol, source tree, client and dedicated server entry point; chess is not a toggle inside a
+snake lobby. A client never creates a server: it connects to a running server, then creates or
+joins a lobby on that server's hub.
 
-* `kind = 0` (`Net.KIND_SNAKE`): the room runs the snake simulation described in sections 6–7. The
-  host configures board size, speed, tick rate, subtick and walls.
-* `kind = 1` (`Net.KIND_CHESS`): the room is a two-player chess match. The host picks a colour
-  (`chessSide`) and a bot depth (`chessBotDepth`), then starts the match.
+* **Snake** (`snakenet.snake.*`, `SnakeNET.jar`): the room runs the snake simulation described in
+  sections 6–7. The host configures board size, speed, tick rate, subtick, walls and whether a
+  snake may pass through its own body (`safeSelf`, on by default).
+* **Chess** (`snakenet.chess.*`, `ChessNET.jar`): the room is a two-player chess match. The host
+  picks a colour (`chessSide`) and a bot depth (`chessBotDepth`), then starts the match.
 
 Chess flow:
 
@@ -601,18 +611,23 @@ Chess flow:
 * `chess/move/out` carries the applied move and the resulting FEN for move animation.
 * The game ends on checkmate, stalemate or a draw via `chess/end` (`w` winner, `r` reason); the phase
   becomes `OVER` and the result overlay is driven by the room sync vars.
+* After a short result overlay the server returns the room to the lobby automatically. A finished
+  player cannot move until a new match starts.
+* To help new players, the lobby carries a one-line how-to-play hint, the match screen shows a
+  contextual status line, and **H** opens a full rules overlay.
 
 ## 11. Reconnect and session resume
 
-The client sends a random session token in `snake/hello`. The server maps the token to a session, and
-the session follows the player from the hub into a lobby.
+The client sends a random session token in its game's hello message (`snake/hello` or
+`chess/hello`). The server maps the token to a session, and the session follows the player from the
+hub into a lobby.
 
 * A dropped player outside the lobby is removed from the session map; the connection is gone.
 * A dropped player inside a lobby is marked `reconnecting` and kept for 30 seconds.
-* A repeated `snake/hello` with the same token resumes the same session and player id, and clears
+* A repeated hello with the same token resumes the same session and player id, and clears
   pending inputs; if the session is in a lobby, the room re-sends `WELCOME` and the full sync state.
-* If the token is used by a different live connection, the old connection receives `snake/kicked`
-  and is closed after the new one is admitted.
+* If the token is used by a different live connection, the old connection receives the game's
+  `kicked` message and is closed after the new one is admitted.
 * A repeated `HELLO` on a UDP connection whose address changed is matched by the token, so no
   duplicate player is created.
 * After 30 seconds the player is removed and their snake dies.
@@ -643,25 +658,32 @@ and the authoritative turn land on the same cell boundary.
 ## 13. Tools and tests
 
 ```bat
-java -Djava.awt.headless=true -cp "SnakeNET.jar;NetCore.jar" snakenet.SelfTest
-java -Djava.awt.headless=true -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.SubtickProbe 64 8
-java -cp "SnakeNET.jar;NetCore.jar" snakenet.server.StandaloneServer --game=snake --port=45800
-java -cp "SnakeNET.jar;NetCore.jar" snakenet.server.StandaloneServer --game=chess --port=45801
-java -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.NetBench
-java -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.ChaosProxy 45990 127.0.0.1 45800 80 20 2
-java -cp "SnakeNET.jar;NetCore.jar" snakenet.tools.UiShots docs\screens
+java -Djava.awt.headless=true -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.SelfTest
+java -Djava.awt.headless=true -cp "ChessNET.jar;NetCore.jar" snakenet.chess.SelfTest
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.tools.SubtickProbe 64 8
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.SnakeServer --port=45800
+java -cp "ChessNET.jar;NetCore.jar" snakenet.chess.ChessServer --port=45801
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.tools.NetBench
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.tools.ChaosProxy 45990 127.0.0.1 45800 80 20 2
+java -cp "SnakeNET.jar;NetCore.jar" snakenet.snake.tools.UiShots docs\screens\snake
+java -cp "ChessNET.jar;NetCore.jar" snakenet.chess.tools.UiShots docs\screens\chess
 ```
 
-`SelfTest` runs 238 checks: ticks and clock maths, motion continuity, grid-aligned turns, prediction
-and replay, compression, quality scoring, subtick ordering and counters, voice jitter and guard,
-continuous render maths at 16 and 32 Hz, tuning factories, UDP/TCP transport, flood protection,
-auto-reconnect, UDP same-address reconnect, LAN discovery, matchmaking pairing policies and timeouts,
-declared messages and RPC direction, sync-var replication, hub multi-lobby isolation, chess rules and
-search, full three-client rounds, bots, kicks and reconnects.
+The snake self-test runs 216 checks: ticks and clock maths, motion continuity, grid-aligned turns,
+prediction and replay, compression, quality scoring, subtick ordering and counters, voice jitter and
+guard, continuous render maths at 16 and 32 Hz, tuning factories, UDP/TCP transport, flood
+protection, auto-reconnect, UDP same-address reconnect, LAN discovery, matchmaking pairing policies
+and timeouts, declared messages and RPC direction, sync-var replication, hub multi-lobby isolation,
+full three-client rounds, bots, kicks and reconnects.
+
+The chess self-test runs 38 checks: tick config, message encoding, chess configuration, the rules
+(legal moves, check, checkmate and FEN), the search bot, and a real dedicated-server round with a
+bot opponent.
 
 `SubtickProbe` starts a headless server and hub, creates a lobby, sends four inputs with different
 fractions for one tick, and prints the server counters, the bucket histogram and the winning
 direction. It exits non-zero on failure.
 
 `NetBench` measures compression and loopback throughput and prints the quality table. `ChaosProxy`
-adds latency, jitter and loss to UDP. `UiShots` renders the documentation screenshots off-screen.
+adds latency, jitter and loss to UDP. Each `UiShots` renders its own game's documentation
+screenshots off-screen.
